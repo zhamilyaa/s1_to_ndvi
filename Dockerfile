@@ -69,6 +69,7 @@ RUN groupadd -g ${GROUP_ID} ${USERNAME} &&\
      ${USER_ID}:${GROUP_ID} \
         /home/${USERNAME}
 
+
 COPY provision/roles/lgblkb/files/poetry_cache/* ./
 RUN poetry install
 
@@ -82,6 +83,7 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install
 #RUN pip3 install --no-cache-dir torchvision==0.10.0+cu111 torchaudio==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html &&\
 #    pip3 install --no-cache-dir kedro
+
 #RUN pip3 install torch torchvision torchaudio
 
 

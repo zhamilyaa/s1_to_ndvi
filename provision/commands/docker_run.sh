@@ -10,8 +10,8 @@ docker run  \
 	--env MPLCONFIGDIR=/Users/zhamilya/Desktop/storage/caches  \
 	--env GDAL_CACHEMAX=256  \
 	--env NUMEXPR_MAX_THREADS=8  \
-	--network sentinel_network  \
+	--network s1_to_ndvi_network  \
 	--volume /Users/zhamilya/Desktop/storage/caches:/Users/zhamilya/Desktop/storage/caches  \
 	--volume /Users/zhamilya/Desktop/storage/data:/Users/zhamilya/Desktop/storage/data  \
-	--volume /home/zhamilya/PycharmProjects/sentinel:/home/zhamilya/PycharmProjects/sentinel  \
-	--workdir /home/zhamilya/PycharmProjects/sentinel "$@"
+	--volume /home/zhamilya/PycharmProjects/s1_to_ndvi:/home/zhamilya/PycharmProjects/s1_to_ndvi  \
+	--workdir /home/zhamilya/PycharmProjects/s1_to_ndvi "$@"

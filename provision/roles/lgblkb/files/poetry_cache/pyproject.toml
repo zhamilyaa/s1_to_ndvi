@@ -3,7 +3,7 @@ name = "sentinel"
 version = "0.1.0"
 description = ""
 authors = ["zhamilya <zhamilya.saparova@nu.edu.kz>"]
-repository = "git@github.com:zhamilyaa/sentinel.git"
+repository = "git@github.com:zhamilyaa/s1_to_ndvi.git"
 
 [tool.poetry.dependencies]
 python = "~3.8"
@@ -16,7 +16,7 @@ python-box = "^5.2.0"
 pyyaml = "^5.3.1"
 taskipy = "^1.6.0"
 tomlkit = "^0.7.0"
-jinja2 = "^2.11.2"
+jinja2 = "*"
 watchdog = "^1.0.2"
 argh = "^0.26.2"
 docker = "^5.0.0"
@@ -29,12 +29,15 @@ rasterio = "^1.2.6"
 geopandas = "^0.10.0"
 scikit-learn = "^1.0"
 matplotlib = "^3.4.3"
-wandb = "^0.12.3"
+# wandb = "^0.12.3"
 lgblkb-tools = "^2.1.0"
-albumentations = "^1.1.0"
-torchsummary = "^1.5.1"
-pytorch-lightning = "^1.4.9"
-
+# albumentations = "^1.1.0"
+# torchsummary = "^1.5.1"
+# pytorch-lightning = "^1.4.9"
+ortools = "9.1.9490"
+celery = "^5.1.2"
+redis = "^3.5.3"
+Flask = "^2.0.2"
 
 
 [tool.poetry.dev-dependencies]
