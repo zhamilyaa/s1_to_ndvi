@@ -1,0 +1,11 @@
+default:
+  pre: "{{docker_infra}}"
+  configs:
+    #    db: ../containers/infra/db.yaml
+    rabbitmq: ../containers/infra/rabbitmq.yaml
+    redis: ../containers/infra/redis.yaml
+    flower: ../containers/infra/flower.yaml
+
+development:
+  configs:
+    portainer: ../containers/infra/portainer.yaml

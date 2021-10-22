@@ -1,0 +1,268 @@
+import numpy as np
+import rasterio
+import logging
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from torch import nn
+import torch
+import pickle
+import random
+import rasterio as rio
+import os
+from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection, Point
+import geopandas
+from pathlib import Path
+import fiona
+import rasterio.mask
+import os
+import rasterio
+import json
+import shapely.wkt
+import shapely.geometry
+import hashlib
+
+
+
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+
+from flask import Flask, render_template, request,render_template_string
+
+app = Flask(__name__)
+
+
+@app.route('/')
+def form():
+    return render_template('form.html')
+
+@app.route('/data/', methods=['POST', 'GET'])
+def snap():
+    if request.method == 'GET':
+        return f"The URL /data is accessed directly. Try going to '/form' to submit form"
+    if request.method == 'POST':
+        form_data = request.form
+        logger.debug('Start')
+        zipfile = form_data["SAFE.zip File Path"]
+        wkt = form_data["WKT"]
+
+        path = Path(__file__).absolute().parents[1]
+
+        new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
+        vh_name = str(new_name)+'_vh.tif'
+        vv_name = str(new_name)+'_vv.tif'
+        nrpb_name = str(new_name)+'_nrpb.tif'
+        cropped = str(new_name)+'_cropped.tif'
+        wkt_to_geojson = str(new_name)+'.geojson'
+        vrt = str(new_name)+'.vrt'
+        result_image = str(new_name)+'_res.tif'
+        processed_images = 'processed_images'
+        if not os.path.exists(processed_images):
+            os.mkdir(processed_images, mode=0o755)
+        preprocess = str(path.joinpath("bin/gpt")) + " " + str(path.joinpath(
+            'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+            zipfile) + " -Poutput_vh=" + str(path.joinpath(processed_images).joinpath(vh_name)) + " -Poutput_vv=" + str(
+            path.joinpath(processed_images).joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+            path.joinpath(processed_images).joinpath(nrpb_name))
+        os.system(preprocess)
+
+        vrt_path = 'vrt'
+        if not os.path.exists(vrt_path):
+            os.mkdir(vrt_path, mode=0o755)
+        merge = 'gdalbuildvrt -separate '+str(path.joinpath(vrt_path).joinpath(vrt))+' '+str(path.joinpath(processed_images).joinpath(vh_name))+' '+str(path.joinpath(processed_images).joinpath(vv_name))+' '+str(path.joinpath(processed_images).joinpath(nrpb_name))
+        os.system(merge)
+
+        wkt_path = 'wkt'
+        if not os.path.exists(wkt_path):
+            os.mkdir(wkt_path, mode=0o755)
+        g1 = shapely.wkt.loads(wkt)
+        print(g1)
+        g2 = shapely.geometry.mapping(g1)
+        print(g2)
+        with open(path.joinpath(wkt_path).joinpath(wkt_to_geojson), 'w') as dst:
+            json.dump(g2, dst)
+
+        results_path = 'results'
+        if not os.path.exists(results_path):
+            os.mkdir(results_path, mode=0o755)
+        crop = "gdalwarp -crop_to_cutline -cutline "+str(path.joinpath(wkt_path).joinpath(wkt_to_geojson))+" "+str(path.joinpath(vrt_path).joinpath(vrt))+" "+str(path.joinpath(results_path).joinpath(cropped))
+        os.system(crop)
+
+        with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as src:
+            out_meta = src.meta
+            img = src.read()
+            out_meta.update(nodata=0)
+            out_meta['crs'] = "EPSG:3857"
+            print(out_meta)
+            with rasterio.open(path.joinpath(results_path).joinpath(cropped), 'w', **out_meta) as dst:
+                dst.write(img)
+
+        ## PREPROCESSING FINISHES HERE
+
+        with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as file:
+            channels = file.read()
+            out_meta = src.meta
+
+
+        logger.info(f"INPUT TIF SHAPE {channels.shape}")
+        data = np.moveaxis(channels, 0, -1)
+        logger.info(f"INPUT TIF SHAPE {data.shape}")
+        data = data.reshape(-1,4)
+        logger.debug(data.shape)
+        x = data[:, 1:]
+        y = data[:, 0]
+        logger.info(f" X SHAPE {x.shape}")
+        logger.info(f" Y SHAPE {y.shape}")
+        filename = "randomforest_20.pkl"
+
+        loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
+
+        yhat = loaded_model.predict(x)
+        yhat_img = yhat.reshape(1,128,128)
+        print(yhat_img.shape)
+
+        out_meta.update({"driver": "GTiff",
+                         "count":1},
+                        nodata=0)
+
+        with rasterio.open(path.joinpath(result_image), "w", **out_meta) as dest:
+            dest.write(yhat_img)
+
+        logger.debug("FINISHED")
+        mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+        logger.info("mse_loss: %s", mse_loss)
+
+        return
+
+def main():
+    print("salem")
+    return
+    path = Path(__file__).absolute().parents[1]
+    print(path)
+
+    zipfile = 'hello'
+    new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
+    vh_name = str(new_name) + '_vh.tif'
+    vv_name = str(new_name) + '_vv.tif'
+    nrpb_name = str(new_name) + '_nrpb.tif'
+    cropped = str(new_name) + '_cropped.tif'
+    wkt_to_geojson = str(new_name) + '.geojson'
+    vrt = str(new_name) + '.vrt'
+    new_folder = 'original'
+    processed_images = 'or'
+    preprocess = str(path.joinpath("bin/gpt")) + " " + str(path.joinpath(
+        'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+        zipfile) + " -Poutput_vh=" + str(path.joinpath(processed_images).joinpath(vh_name)) + " -Poutput_vv=" + str(
+        path.joinpath(processed_images).joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+        path.joinpath(processed_images).joinpath(nrpb_name))
+
+
+    print(preprocess)
+    return
+    with rasterio.open("./tiles_256/tile_64_64.tiff") as file:
+        channels = file.read()
+
+    logger.info(f"INPUT TIF SHAPE {channels.shape}")
+    data = np.moveaxis(channels, 0, -1)
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+    data = data.reshape(-1,4)
+    logger.debug(data.shape)
+    x = data[:, 1:]
+    y = data[:, 0]
+    logger.info(f" X SHAPE {x.shape}")
+    logger.info(f" Y SHAPE {y.shape}")
+    filename = "randomforest_20.pkl"
+
+    loaded_model = pickle.load(open(filename, 'rb'))
+    print(loaded_model)
+    result = loaded_model.score(x,y)
+    logger.info("score:\n%s", result)
+    yhat = loaded_model.predict(x)
+    yhat_img = yhat.reshape(1,128,128)
+    print(yhat_img.shape)
+
+    with rasterio.open("./tiles_256/tile_64_64.tiff") as src:
+        out_meta = src.meta
+        print(out_meta)
+
+    out_meta.update({"driver": "GTiff",
+                     "count":1},
+                    nodata=0)
+
+    with rasterio.open('tile4.tiff', "w", **out_meta) as dest:
+        dest.write(yhat_img)
+
+    logger.debug("FINISHED")
+    mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+    logger.info("mse_loss: %s", mse_loss)
+
+    return
+    with rasterio.open("./new_data.tif") as file:
+        channels = file.read()
+
+    logger.info(f"INPUT TIF SHAPE {channels.shape}")
+    data = np.moveaxis(channels, 0, -1)
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+    data = data.reshape(-1,4)
+    logger.debug(data.shape)
+    number_of_rows = data.shape[0]
+    random_indices = np.random.choice(number_of_rows, size=10000000, replace=False)
+    data = data[random_indices, :]
+
+    valid_pixels = ~np.isnan(data.sum(axis=1))  # .reshape(-1, 1)
+    print((valid_pixels==0).sum())
+    print(valid_pixels.shape)
+
+    # return
+    # data = data[:100000, ]
+    # valid_pixels = valid_pixels[:100000, ]
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+
+    X_train, X_test, y_train, y_test = train_test_split(data[valid_pixels, 1:], data[valid_pixels, 0], test_size=0.1)
+    logger.info(f"TRAIN X SHAPE {X_train.shape}")
+    logger.info(f"TRAIN Y SHAPE {y_train.shape}")
+    logger.info(f"TEST X SHAPE {X_test.shape}")
+    logger.info(f"TEST Y SHAPE {y_test.shape}")
+    filename = "randomforest_10.pkl"
+    logger.info(filename)
+
+    # # load the model from disk
+    # loaded_model = pickle.load(open(filename, 'rb'))
+    # print(loaded_model)
+    # result = loaded_model.predict(X_test)
+    # print(len(result))
+    #
+    #
+    #
+    # return
+    # result = loaded_model.score(X_test, y_test)
+    # print(result)
+    # return
+
+    regressor = RandomForestRegressor(verbose=True, n_jobs=2, n_estimators=100, max_depth = 10)
+    logger.info("REGRESSOR FITTING STARTS")
+    regressor.fit(X_train, y_train)
+    logger.info("REGRESSOR FITTING ENDS")
+    yhat = regressor.predict(X_test)
+    logger.info("REGRESSOR PREDICTING ENDS")
+    mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y_test))
+    score = regressor.score(X_test, y_test)
+    logger.info("score:\n%s", score)
+    logger.info("mse_loss: %s", mse_loss)
+    filename = "randomforest_30.pkl"
+    pickle.dump(regressor, open(filename, 'wb'))
+    # predicted_ndvis = np.zeros(data.shape[0], 1) * np.nan
+    # predicted_ndvis[valid_pixels] = regressor.predict(data[valid_pixels])
+
+    pass
+
+app.run(host='0.0.0.0', port=5000)
+
+
+if __name__ == '__main__':
+    main()

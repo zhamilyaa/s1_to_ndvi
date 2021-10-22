@@ -1,0 +1,205 @@
+<graph id="calibration">
+    <version>1.0</version>
+    <node id="cal">
+        <operator>Calibration</operator>
+        <sources>
+            <source>${source}</source>
+        </sources>
+        <parameters>
+
+    <!--<sourceBands>string,string,string,...</sourceBands>-->
+            <auxFile>Product Auxiliary File</auxFile>
+<!--            <externalAuxFile>file</externalAuxFile>-->
+            <outputImageInComplex>boolean</outputImageInComplex>
+            <outputImageScaleInDb>boolean</outputImageScaleInDb>
+            <createGammaBand>boolean</createGammaBand>
+            <createBetaBand>true</createBetaBand>
+            <selectedPolarisations>VH,VV</selectedPolarisations>
+            <outputSigmaBand>true</outputSigmaBand>
+            <outputGammaBand>boolean</outputGammaBand>
+            <outputBetaBand>boolean</outputBetaBand>
+<!--            <outputDNBand>boolean</outputDNBand>-->
+        </parameters>
+    </node>
+    <node id="Speckle-Filter">
+        <operator>Speckle-Filter</operator>
+        <sources>
+            <sourceProduct refid="cal"/>
+        </sources>
+        <parameters>
+<!--            <sourceBands/>-->
+            <filter>${filter}</filter>
+            <filterSizeX>3</filterSizeX>
+            <filterSizeY>3</filterSizeY>
+            <dampingFactor>2</dampingFactor>
+            <estimateENL>true</estimateENL>
+            <enl>1.0</enl>
+            <numLooksStr>1</numLooksStr>
+            <windowSize>7x7</windowSize>
+            <targetWindowSizeStr>3x3</targetWindowSizeStr>
+            <sigmaStr>0.9</sigmaStr>
+            <anSize>50</anSize>
+        </parameters>
+    </node>
+    <node id="Terrain-Correction">
+        <operator>Terrain-Correction</operator>
+        <sources>
+            <sourceProduct refid="Speckle-Filter"/>
+        </sources>
+        <parameters>
+            <sourceBands/>
+            <demName>${dem}</demName>
+            <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+            <externalDEMApplyEGM>true</externalDEMApplyEGM>
+            <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
+            <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
+            <pixelSpacingInMeter>${resolution}</pixelSpacingInMeter>
+            <mapProjection>${crs}</mapProjection>
+            <alignToStandardGrid>true</alignToStandardGrid>
+            <standardGridOriginX>${origin}</standardGridOriginX>
+            <standardGridOriginY>${origin}</standardGridOriginY>
+            <nodataValueAtSea>false</nodataValueAtSea>
+            <saveDEM>false</saveDEM>
+            <saveLatLon>false</saveLatLon>
+            <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
+            <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+            <saveProjectedLocalIncidenceAngle>false</saveProjectedLocalIncidenceAngle>
+            <saveSelectedSourceBand>true</saveSelectedSourceBand>
+            <outputComplex>false</outputComplex>
+            <applyRadiometricNormalization>false</applyRadiometricNormalization>
+            <saveSigmaNought>false</saveSigmaNought>
+            <saveGammaNought>false</saveGammaNought>
+            <saveBetaNought>false</saveBetaNought>
+            <incidenceAngleForSigma0>Use projected local incidence angle from DEM</incidenceAngleForSigma0>
+            <incidenceAngleForGamma0>Use projected local incidence angle from DEM</incidenceAngleForGamma0>
+            <auxFile>Latest Auxiliary File</auxFile>
+        </parameters>
+    </node>
+    <node id="LinearToFromdB">
+        <operator>LinearToFromdB</operator>
+        <sources>
+            <sourceProduct refid="Terrain-Correction"/>
+        </sources>
+        <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+            <sourceBands/>
+        </parameters>
+    </node>
+
+    <node id="testnode">
+        <operator>BandMaths</operator>
+        <sources>
+            <sourceProduct refid="LinearToFromdB"/>
+        </sources>
+        <parameters>
+            <targetBands>
+                <targetBand>
+                <name>NRPB</name>
+                <expression>(Sigma0_VH_db - Sigma0_VV_db)/(Sigma0_VH_db + Sigma0_VV_db)</expression>
+                <description>NRPB</description>
+                <type>float32</type>
+                <noDataValue>0</noDataValue>
+                </targetBand>
+            </targetBands>
+            </parameters>
+
+    </node>
+
+<!--    <node id="mergeNode">-->
+<!--        <operator>Merge</operator>-->
+<!--        <sources>-->
+<!--            <masterProduct refid="LinearToFromdB" />-->
+<!--            <sourceProducts>testnode</sourceProducts>-->
+<!--        </sources>-->
+<!--        <parameters>-->
+<!--            <includes>-->
+<!--                <include>-->
+<!--                    <productId>testBand</productId>-->
+<!--                    <name>NRPB</name>-->
+<!--                </include>-->
+<!--            </includes>-->
+<!--        </parameters>-->
+<!--    </node>-->
+
+    <node id="BandSelect">
+        <operator>BandSelect</operator>
+        <sources>
+            <sourceProduct refid="LinearToFromdB"/>
+        </sources>
+        <parameters>
+            <selectedPolarisations/>
+            <sourceBands>Sigma0_VH_db</sourceBands>
+            <bandNamePattern/>
+        </parameters>
+    </node>
+    <node id="Write">
+        <operator>Write</operator>
+        <sources>
+            <sourceProduct refid="BandSelect"/>
+        </sources>
+        <parameters>
+            <file>${output_vh}</file>
+            <formatName>GeoTiff</formatName>
+        </parameters>
+
+    </node>
+
+
+    <node id="BandSelect1">
+        <operator>BandSelect</operator>
+        <sources>
+            <sourceProduct refid="LinearToFromdB"/>
+        </sources>
+        <parameters>
+            <selectedPolarisations/>
+            <sourceBands>Sigma0_VV_db</sourceBands>
+            <bandNamePattern/>
+        </parameters>
+    </node>
+    <node id="Write">
+        <operator>Write</operator>
+        <sources>
+            <sourceProduct refid="BandSelect1"/>
+        </sources>
+        <parameters>
+            <file>${output_vv}</file>
+            <formatName>GeoTiff</formatName>
+        </parameters>
+
+    </node>
+
+    <node id="BandSelect2">
+        <operator>BandSelect</operator>
+        <sources>
+            <sourceProduct refid="testnode"/>
+        </sources>
+        <parameters>
+            <selectedPolarisations/>
+            <sourceBands>NRPB</sourceBands>
+            <bandNamePattern/>
+        </parameters>
+    </node>
+    <node id="Write">
+        <operator>Write</operator>
+        <sources>
+            <sourceProduct refid="BandSelect2"/>
+        </sources>
+        <parameters>
+            <file>${output_nrpb}</file>
+            <formatName>GeoTiff</formatName>
+        </parameters>
+
+    </node>
+
+
+
+<!--    <node id="Write">-->
+<!--        <operator>Write</operator>-->
+<!--        <sources>-->
+<!--            <sourceProduct refid="testnode"/>-->
+<!--        </sources>-->
+<!--        <parameters class="com.bc.ceres.binding.dom.XppDomElement">-->
+<!--            <file>${output}</file>-->
+<!--            <formatName>GeoTIFF</formatName>-->
+<!--        </parameters>-->
+<!--    </node>-->
+</graph>
