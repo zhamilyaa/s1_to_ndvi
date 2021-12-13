@@ -1,31 +1,28 @@
-import itertools
-import math
-import os
-
-import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import wandb
-from lgblkb_tools import logger
-# from osgeo import gdal
-from torch.utils.data import DataLoader, Dataset, random_split
-import sklearn.preprocessing
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, QuantileTransformer, RobustScaler
-from pickle import dump
-from pickle import load
-import albumentations as A
-from sklearn.model_selection import train_test_split
-import pytorch_lightning as pl
-from pytorch_lightning.core.lightning import LightningModule
-import cv2
 import logging
-from pytorch_lightning.loggers import WandbLogger  # newline 1
-from pytorch_lightning import Trainer
-from box import Box
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
+from torch import nn
+import torch
+import pickle
+import random
+import rasterio as rio
+import os
+from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection, Point
+import geopandas
+from pathlib import Path
+import fiona
+import rasterio.mask
+import os
+import rasterio
+import json
+import shapely.wkt
+import shapely.geometry
+import hashlib
+from config import settings
+
+
 
 
 logger = logging.getLogger(__name__)
@@ -35,438 +32,393 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-scaler_b1 = load(open('scaler_b1.pkl', 'rb'))
-scaler_b2 = load(open('scaler_b2.pkl', 'rb'))
-scaler_b3 = load(open('scaler_b3.pkl', 'rb'))
-
-
-class ResidualConv(nn.Module):
-    def __init__(self, input_dim, output_dim, stride, padding):
-        super(ResidualConv, self).__init__()
-
-        self.conv_block = nn.Sequential(
-            nn.BatchNorm2d(input_dim),
-            nn.ReLU(),
-            nn.Conv2d(
-                input_dim, output_dim, kernel_size=3, stride=stride, padding=padding
-            ),
-            nn.BatchNorm2d(output_dim),
-            nn.ReLU(),
-            nn.Conv2d(output_dim, output_dim, kernel_size=3, padding=1),
-        )
-        self.conv_skip = nn.Sequential(
-            nn.Conv2d(input_dim, output_dim, kernel_size=3, stride=stride, padding=1),
-            nn.BatchNorm2d(output_dim),
-        )
-
-    def forward(self, x):
-        return self.conv_block(x) + self.conv_skip(x)
-
-
-class Upsample(nn.Module):
-    def __init__(self, input_dim, output_dim, kernel, stride):
-        super(Upsample, self).__init__()
-
-        self.upsample = nn.ConvTranspose2d(
-            input_dim, output_dim, kernel_size=kernel, stride=stride
-        )
-
-    def forward(self, x):
-        return self.upsample(x)
-
-
-class Squeeze_Excite_Block(nn.Module):
-    def __init__(self, channel, reduction=16):
-        super(Squeeze_Excite_Block, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
-            nn.Sigmoid(),
-        )
-
-    def forward(self, x):
-        b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
-        return x * y.expand_as(x)
-
-
-class ASPP(nn.Module):
-    def __init__(self, in_dims, out_dims, rate=[6, 12, 18]):
-        super(ASPP, self).__init__()
-
-        self.aspp_block1 = nn.Sequential(
-            nn.Conv2d(
-                in_dims, out_dims, 3, stride=1, padding=rate[0], dilation=rate[0]
-            ),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(out_dims),
-        )
-        self.aspp_block2 = nn.Sequential(
-            nn.Conv2d(
-                in_dims, out_dims, 3, stride=1, padding=rate[1], dilation=rate[1]
-            ),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(out_dims),
-        )
-        self.aspp_block3 = nn.Sequential(
-            nn.Conv2d(
-                in_dims, out_dims, 3, stride=1, padding=rate[2], dilation=rate[2]
-            ),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(out_dims),
-        )
-
-        self.output = nn.Conv2d(len(rate) * out_dims, out_dims, 1)
-        self._init_weights()
-
-    def forward(self, x):
-        x1 = self.aspp_block1(x)
-        x2 = self.aspp_block2(x)
-        x3 = self.aspp_block3(x)
-        out = torch.cat([x1, x2, x3], dim=1)
-        return self.output(out)
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-
-
-class Upsample_(nn.Module):
-    def __init__(self, scale=2):
-        super(Upsample_, self).__init__()
-
-        self.upsample = nn.UpsamplingBilinear2d(scale_factor=scale)
-
-    def forward(self, x):
-        return self.upsample(x)
-
-
-class AttentionBlock(nn.Module):
-    def __init__(self, input_encoder, input_decoder, output_dim):
-        super(AttentionBlock, self).__init__()
-
-        self.conv_encoder = nn.Sequential(
-            nn.BatchNorm2d(input_encoder),
-            nn.ReLU(),
-            nn.Conv2d(input_encoder, output_dim, 3, padding=1),
-            nn.MaxPool2d(2, 2),
-        )
-
-        self.conv_decoder = nn.Sequential(
-            nn.BatchNorm2d(input_decoder),
-            nn.ReLU(),
-            nn.Conv2d(input_decoder, output_dim, 3, padding=1),
-        )
-
-        self.conv_attn = nn.Sequential(
-            nn.BatchNorm2d(output_dim),
-            nn.ReLU(),
-            nn.Conv2d(output_dim, 1, 1),
-        )
-
-    def forward(self, x1, x2):
-        out = self.conv_encoder(x1) + self.conv_decoder(x2)
-        out = self.conv_attn(out)
-        return out * x2
-
-# DATASET PREPROCESSING
-class TheDataset(pl.LightningDataModule):
-    def __init__(self, path, files, transform=None):
-        self.path = path
-        self.dirs = files
-        self.transforms = transform
-
-    # GLOBAL SCALES
-    @staticmethod
-    def read_tif(path='./res/new_data.tif'):
-        with rasterio.open(path) as ds:
-            data = ds.read()
-            d = dict(s1=data[1:], s2=data[:1], path=path)
-            d1 = d['s1']
-
-            s1_b1 = d1[0, :, :].reshape(-1, 1)
-            s1_b2 = d1[1, :, :].reshape(-1, 1)
-            s1_b3 = d1[2, :, :].reshape(-1, 1)
-            s1_b3 = np.clip(s1_b3, 0, 0.75)
-
-            scaler_b1 = StandardScaler().fit(s1_b1)
-            scaler_b2 = StandardScaler().fit(s1_b2)
-            scaler_b3 = StandardScaler().fit(s1_b3)
-
-            dump(scaler_b1, open('./scaler_b1.pkl', 'wb'))
-            dump(scaler_b2, open('./scaler_b2.pkl', 'wb'))
-            dump(scaler_b3, open('./scaler_b3.pkl', 'wb'))
-
-            return
-
-    def read_sample(self, item):
-        path = os.path.join(self.path, self.dirs[item])
-        with rasterio.open(path) as ds:
-            data = np.moveaxis(ds.read(), 0, -1)
-            return dict(sentinel=data, path=path)
-
-    def __getitem__(self, item):
-        s = self.read_sample(item)
-        sentinel = s['sentinel']
-
-        # FOR TEST DATA THERE IS NO TRANSFORM
-        if self.transforms == None:
-            sentinel = sentinel
-        else:
-            sentinel = self.transforms(image=sentinel)['image']
-
-        s1 = sentinel[:, :, 1:]
-        s1_b1 = s1[:, :, 0].reshape(-1, 1)
-        s1_b2 = s1[:, :, 1].reshape(-1, 1)
-        s1_b3 = s1[:, :, 2].reshape(-1, 1)
 
-        s2 = sentinel[:, :, :1]
-        s2_b = s2.reshape(-1, 1)
-
-        # SCALING WITH GLOBAL SCALERS OF EACH BAND
-        s1_b1_tensor = torch.from_numpy((scaler_b1.transform(s1_b1)).reshape(1, 128, 128))
-        s1_b2_tensor = torch.from_numpy((scaler_b2.transform(s1_b2)).reshape(1, 128, 128))
-        s1_b3_tensor = torch.from_numpy((scaler_b3.transform(s1_b3)).reshape(1, 128, 128))
-        s2_b_tensor = torch.from_numpy(s2_b.reshape(1, 128, 128))
-
-        # CONCATINATING BANDS
-        s1 = torch.cat((s1_b1_tensor, s1_b2_tensor,s1_b3_tensor))
-        s2 = s2_b_tensor
-
-        path = s['path']
-
-        return s1, s2, path
-
-    def __len__(self):
-        return len(self.dirs)
-
-# GET LOADERS
-class DataModule(pl.LightningDataModule):
-    def __init__(self, batch_size, path, files, transform):
-        self.batch_size = batch_size
-        self.path = path
-        self.files = files
-        self.transform = transform
-
-    def train_dataloader(self):
-        train_data = TheDataset(self.path, self.files, self.transform)
-        logger.info(f"Length of train data: {len(train_data)} ")
-        return DataLoader(dataset=train_data,
-                                  batch_size=self.batch_size,
-                                  shuffle=False)
-
-    def train_dataloader(self):
-        test_data = TheDataset(self.path, self.files, self.transform)
-        logger.info(f"Length of test data: {len(test_data)} ")
-        return DataLoader(dataset=test_data,
-                                  batch_size=self.batch_size,
-                                  shuffle=False)
-
-# MODEL
-class ResUnetPlusPlus(LightningModule):
-    def __init__(self, channel, filters=(6, 32, 64, 128, 256)):
-        super(ResUnetPlusPlus, self).__init__()
-
-        self.input_layer = nn.Sequential(
-            nn.Conv2d(channel, filters[0], kernel_size=3, padding=1),
-            nn.BatchNorm2d(filters[0]),
-            nn.ReLU(),
-            nn.Conv2d(filters[0], filters[0], kernel_size=3, padding=1),
-        )
-        self.input_skip = nn.Sequential(
-            nn.Conv2d(channel, filters[0], kernel_size=3, padding=1)
-        )
-
-        self.squeeze_excite1 = Squeeze_Excite_Block(filters[0])
-
-        self.residual_conv1 = ResidualConv(filters[0], filters[1], 2, 1)
-
-        self.squeeze_excite2 = Squeeze_Excite_Block(filters[1])
-
-        self.residual_conv2 = ResidualConv(filters[1], filters[2], 2, 1)
-
-        self.squeeze_excite3 = Squeeze_Excite_Block(filters[2])
-
-        self.residual_conv3 = ResidualConv(filters[2], filters[3], 2, 1)
-
-        self.aspp_bridge = ASPP(filters[3], filters[4])
-
-        self.attn1 = AttentionBlock(filters[2], filters[4], filters[4])
-        self.upsample1 = Upsample_(2)
-        self.up_residual_conv1 = ResidualConv(filters[4] + filters[2], filters[3], 1, 1)
-
-        self.attn2 = AttentionBlock(filters[1], filters[3], filters[3])
-        self.upsample2 = Upsample_(2)
-        self.up_residual_conv2 = ResidualConv(filters[3] + filters[1], filters[2], 1, 1)
-
-        self.attn3 = AttentionBlock(filters[0], filters[2], filters[2])
-        self.upsample3 = Upsample_(2)
-        self.up_residual_conv3 = ResidualConv(filters[2] + filters[0], filters[1], 1, 1)
-
-        self.aspp_out = ASPP(filters[1], filters[0])
-
-        self.output_layer = nn.Sequential(nn.Conv2d(filters[0], 1, 1), nn.Tanh())
-
-    def forward(self, x):
-        x1 = self.input_layer(x) + self.input_skip(x)
-
-        x2 = self.squeeze_excite1(x1)
-        x2 = self.residual_conv1(x2)
-
-        x3 = self.squeeze_excite2(x2)
-        x3 = self.residual_conv2(x3)
-
-        x4 = self.squeeze_excite3(x3)
-        x4 = self.residual_conv3(x4)
-
-        x5 = self.aspp_bridge(x4)
-
-        x6 = self.attn1(x3, x5)
-        x6 = self.upsample1(x6)
-        x6 = torch.cat([x6, x3], dim=1)
-        x6 = self.up_residual_conv1(x6)
-
-        x7 = self.attn2(x2, x6)
-        x7 = self.upsample2(x7)
-        x7 = torch.cat([x7, x2], dim=1)
-        x7 = self.up_residual_conv2(x7)
-
-        x8 = self.attn3(x1, x7)
-        x8 = self.upsample3(x8)
-        x8 = torch.cat([x8, x1], dim=1)
-        x8 = self.up_residual_conv3(x8)
-
-        x9 = self.aspp_out(x8)
-        out = self.output_layer(x9)
-        return out
-
+from flask import Flask, render_template, request,render_template_string
+
+app = Flask(__name__)
+
+storage_folder = Path(settings.PROJECT.dirs.data_folder)
+
+@app.route('/')
+def form():
+    return render_template('form.html')
+
+def do_s1_to_ndvi(geometry, zip_path):
+    polygon = shapely.wkt.loads(geometry)
+    new_name = hashlib.md5((str(zip_path)+str(polygon)).encode('utf-8')).hexdigest()
+    path = Path(__file__).absolute().parents[1]
+    vh_name = str(new_name)+'_vh.tif'
+    vv_name = str(new_name)+'_vv.tif'
+    nrpb_name = str(new_name)+'_nrpb.tif'
+    lia_name = str(new_name)+'_lia.tif'
+    cropped = str(new_name)+'_cropped.tif'
+    wkt_to_geojson = str(new_name)+'.geojson'
+    vrt = str(new_name)+'.vrt'
+    result_image = str(new_name)+'_res.tif'
+
+    tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+    tiles_folder.mkdir(exist_ok=True)
+
+    preprocess = str("/opt/snap/bin/gpt") + " " + str(path.joinpath(
+        'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=30 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+        zip_path) + " -Poutput_vh=" + str(tiles_folder.joinpath(vh_name)) + " -Poutput_vv=" + str(
+        tiles_folder.joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+        tiles_folder.joinpath(nrpb_name))+ " -Poutput_lia=" + str(
+        tiles_folder.joinpath(lia_name))
+    os.system(preprocess)
+
+    merge_nodes = 'gdalbuildvrt -separate '+str(tiles_folder.joinpath(vrt))+' '+str(tiles_folder.joinpath(vh_name))+' '+str(tiles_folder.joinpath(vv_name))+' '+str(tiles_folder.joinpath(nrpb_name))+' '+str(tiles_folder.joinpath(lia_name))
+    os.system(merge_nodes)
+
+    g2 = shapely.geometry.mapping(polygon)
+    with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
+        json.dump(g2, dst)
+
+    crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(wkt_to_geojson))+" "+str(tiles_folder.joinpath(vrt))+" "+str(tiles_folder.joinpath(cropped))
+    os.system(crop)
+
+    with rasterio.open(tiles_folder.joinpath(cropped)) as src:
+        out_meta = src.meta
+        img = src.read()
+        out_meta.update(nodata=0)
+        out_meta['crs'] = "EPSG:3857"
+        with rasterio.open(storage_folder.joinpath(cropped), 'w', **out_meta) as dst:
+            dst.write(img)
+
+    logger.info(f"INPUT TIF SHAPE {img.shape}")
+    data = np.moveaxis(img, 0, -1)
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+    data = data.reshape(-1,4)
+    logger.debug(data.shape)
+    x = data[:, 1:]
+    y = data[:, 0]
+    logger.info(f" X SHAPE {x.shape}")
+    logger.info(f" Y SHAPE {y.shape}")
+
+    filename = "randomforest_20.pkl"
+    loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
+
+    yhat = loaded_model.predict(x)
+    yhat_img = yhat.reshape(1,128,128)
+    print(yhat_img.shape)
+
+    out_meta.update({"driver": "GTiff",
+                     "count":1},
+                    nodata=0)
+
+    with rasterio.open(storage_folder.joinpath(result_image), "w", **out_meta) as dest:
+        dest.write(yhat_img)
+
+    logger.debug("FINISHED")
+    mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+    logger.info("mse_loss: %s", mse_loss)
+
+    return
+
+@app.route('/app/v1/s1_to_ndvi', methods=['POST'])
+def perform_s1_to_ndvi():
+    form_data = request.json
+    return do_s1_to_ndvi(**form_data)
+
+# @app.route('/data/', methods=['POST', 'GET'])
+# def snap():
+#     if request.method == 'GET':
+#         return f"The URL /data is accessed directly. Try going to '/form' to submit form"
+#     if request.method == 'POST':
+#         form_data = request.form
+#         logger.debug('Start')
+#         zipfile = form_data["SAFE.zip File Path"]
+#         wkt = form_data["WKT"]
+#
+#         path = Path(__file__).absolute().parents[1]
+#
+#         new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
+#         vh_name = str(new_name)+'_vh.tif'
+#         vv_name = str(new_name)+'_v v.tif'
+#         nrpb_name = str(new_name)+'_nrpb.tif'
+#         cropped = str(new_name)+'_cropped.tif'
+#         wkt_to_geojson = str(new_name)+'.geojson'
+#         vrt = str(new_name)+'.vrt'
+#         result_image = str(new_name)+'_res.tif'
+#         processed_images = 'processed_images'
+#         if not os.path.exists(processed_images):
+#             os.mkdir(processed_images, mode=0o755)
+#         preprocess = str(path.joinpath("bin/gpt")) + " " + str(path.joinpath(
+#             'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+#             zipfile) + " -Poutput_vh=" + str(path.joinpath(processed_images).joinpath(vh_name)) + " -Poutput_vv=" + str(
+#             path.joinpath(processed_images).joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+#             path.joinpath(processed_images).joinpath(nrpb_name))
+#         os.system(preprocess)
+#
+#         vrt_path = 'vrt'
+#         if not os.path.exists(vrt_path):
+#             os.mkdir(vrt_path, mode=0o755)
+#         merge = 'gdalbuildvrt -separate '+str(path.joinpath(vrt_path).joinpath(vrt))+' '+str(path.joinpath(processed_images).joinpath(vh_name))+' '+str(path.joinpath(processed_images).joinpath(vv_name))+' '+str(path.joinpath(processed_images).joinpath(nrpb_name))
+#         os.system(merge)
+#
+#         wkt_path = 'wkt'
+#         if not os.path.exists(wkt_path):
+#             os.mkdir(wkt_path, mode=0o755)
+#         g1 = shapely.wkt.loads(wkt)
+#         print(g1)
+#         g2 = shapely.geometry.mapping(g1)
+#         print(g2)
+#         with open(path.joinpath(wkt_path).joinpath(wkt_to_geojson), 'w') as dst:
+#             json.dump(g2, dst)
+#
+#         results_path = 'results'
+#         if not os.path.exists(results_path):
+#             os.mkdir(results_path, mode=0o755)
+#         crop = "gdalwarp -crop_to_cutline -cutline "+str(path.joinpath(wkt_path).joinpath(wkt_to_geojson))+" "+str(path.joinpath(vrt_path).joinpath(vrt))+" "+str(path.joinpath(results_path).joinpath(cropped))
+#         os.system(crop)
+#
+#         with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as src:
+#             out_meta = src.meta
+#             img = src.read()
+#             out_meta.update(nodata=0)
+#             out_meta['crs'] = "EPSG:3857"
+#             print(out_meta)
+#             with rasterio.open(path.joinpath(results_path).joinpath(cropped), 'w', **out_meta) as dst:
+#                 dst.write(img)
+#
+#         ## PREPROCESSING FINISHES HERE
+#
+#         with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as file:
+#             channels = file.read()
+#             out_meta = src.meta
+#
+#
+#         logger.info(f"INPUT TIF SHAPE {channels.shape}")
+#         data = np.moveaxis(channels, 0, -1)
+#         logger.info(f"INPUT TIF SHAPE {data.shape}")
+#         data = data.reshape(-1,4)
+#         logger.debug(data.shape)
+#         x = data[:, 1:]
+#         y = data[:, 0]
+#         logger.info(f" X SHAPE {x.shape}")
+#         logger.info(f" Y SHAPE {y.shape}")
+#         filename = "randomforest_20.pkl"
+#
+#         loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
+#
+#         yhat = loaded_model.predict(x)
+#         yhat_img = yhat.reshape(1,128,128)
+#         print(yhat_img.shape)
+#
+#         out_meta.update({"driver": "GTiff",
+#                          "count":1},
+#                         nodata=0)
+#
+#         with rasterio.open(path.joinpath(result_image), "w", **out_meta) as dest:
+#             dest.write(yhat_img)
+#
+#         logger.debug("FINISHED")
+#         mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+#         logger.info("mse_loss: %s", mse_loss)
+#
+#         return
+
+def main():
+    # # TESTING
+    # image_test = storage_folder.joinpath('files/area_check.tiff')
+    # # image_test = './tile_0_64.tiff'
+    # print(image_test)
     #
-    # def configure_optimizers(self):
-    #     return torch.optim.Adam(self.parameters(), lr=wandb.config.learning_rate)
+    # with rasterio.open(image_test) as file:
+    #     channels = file.read()
+    #
+    # logger.info(f"INPUT TIF SHAPE {channels.shape}")
+    # data = np.moveaxis(channels, 0, -1)
+    # logger.info(f"INPUT TIF SHAPE {data.shape}")
+    # data = data.reshape(-1,4)
+    # logger.debug(data.shape)
+    # x = data[:, :]
+    # logger.info(f" X SHAPE {x.shape}")
+    #
+    # filename = "randomforest_20.pkl"
+    #
+    # loaded_model = pickle.load(open(filename, 'rb'))
+    # print(loaded_model)
+    # yhat = loaded_model.predict(x)
+    # yhat_img = yhat.reshape(1,1379,2902)
+    # print(yhat_img.shape)
+    #
+    # with rasterio.open(image_test) as src:
+    #     out_meta = src.meta
+    #     print(out_meta)
+    #
+    # out_meta.update({"driver": "GTiff",
+    #                  "count":1},
+    #                 nodata=0)
+    #
+    # with rasterio.open('final2.tiff', "w", **out_meta) as dest:
+    #     dest.write(yhat_img)
+    #
+    # logger.debug("FINISHED")
+    # # mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+    # # logger.info("mse_loss: %s", mse_loss)
+    #
+    # return
+    # path = Path(__file__).absolute().parents[1]
+    # filename = "randomforest_20.pkl"
+    # loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
+    # return
+    # polygon = 'MultiPolygon (((67.68462489838638874 53.80194293541246253, 67.92794889903467492 53.87629193561054564, 67.96850289914272025 53.68366043509732322, 67.72743189850044132 53.62395593493825174, 67.68462489838638874 53.80194293541246253)))'
+    # zip_path = "/home/zhamilya/PycharmProjects/s1_to_ndvi/S1B_IW_GRDH_1SDV_20210609T014215_20210609T014240_027273_0341F1_B9D6.SAFE.zip"
+    #
+    # new_name = '5ed24b0022afb2e5e12a9f6b3ea7cf0b'
+    #
+    # tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+    # cropped = str(new_name)+'_cropped.tif'
+    #
+    # with rasterio.open(tiles_folder.joinpath(cropped)) as src:
+    #     out_meta = src.meta
+    #     img = src.read()
+    #     out_meta.update(nodata=0)
+    #     out_meta['crs'] = "EPSG:3857"
+    #     with rasterio.open(storage_folder.joinpath(cropped), 'w', **out_meta) as dst:
+    #         dst.write(img)
+    #
+    # logger.info(f"INPUT TIF SHAPE {img.shape}")
+    # data = np.moveaxis(img, 0, -1)
+    # logger.info(f"INPUT TIF SHAPE {data.shape}")
+    # data = data.reshape(-1,4)
+    # logger.debug(data.shape)
+    # x = data[:, 1:]
+    # y = data[:, 0]
+    # logger.info(f" X SHAPE {x.shape}")
+    # logger.info(f" Y SHAPE {y.shape}")
+    # return
+    geom = 'Polygon ((67.5789586670413911 54.09040740130313907, 67.59028058351294987 53.83880925749072333, 67.99283761361282075 53.84132523892885303, 67.94629195700751723 54.08285945698876418, 67.94629195700751723 54.08285945698876418, 67.5789586670413911 54.09040740130313907))'
 
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=wandb.config.learning_rate)
-        wandb.log({"Leaning rate": optimizer.param_groups[0]["lr"]})
-        return dict(optimizer=optimizer,
-                    lr_scheduler=dict(
-                        scheduler=torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=500, )
-                    ))
+    geometry = 'MultiPolygon (((67.68462489838638874 53.80194293541246253, 67.92794889903467492 53.87629193561054564, 67.96850289914272025 53.68366043509732322, 67.72743189850044132 53.62395593493825174, 67.68462489838638874 53.80194293541246253)))'
+    zip_path = "/home/zhamilya/PycharmProjects/s1_to_ndvi/S1B_IW_GRDH_1SDV_20210609T014215_20210609T014240_027273_0341F1_B9D6.SAFE.zip"
+    do_s1_to_ndvi(geom,zip_path)
+    print("salem")
+    return
+    # app.run(host='0.0.0.0', port=5000)
+    #
+    # path = Path(__file__).absolute().parents[1]
+    # print(path)
+    #
+    # zipfile = 'hello'
+    # new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
+    # vh_name = str(new_name) + '_vh.tif'
+    # vv_name = str(new_name) + '_vv.tif'
+    # nrpb_name = str(new_name) + '_nrpb.tif'
+    # cropped = str(new_name) + '_cropped.tif'
+    # wkt_to_geojson = str(new_name) + '.geojson'
+    # vrt = str(new_name) + '.vrt'
+    # new_folder = 'original'
+    # processed_images = 'or'
+    # preprocess = str(path.joinpath("bin/gpt")) + " " + str(path.joinpath(
+    #     'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+    #     zipfile) + " -Poutput_vh=" + str(path.joinpath(processed_images).joinpath(vh_name)) + " -Poutput_vv=" + str(
+    #     path.joinpath(processed_images).joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+    #     path.joinpath(processed_images).joinpath(nrpb_name))
+    #
+    #
+    # print(preprocess)
+    # return
+    # with rasterio.open("./tiles_256/tile_64_64.tiff") as file:
+    #     channels = file.read()
+    #
+    # logger.info(f"INPUT TIF SHAPE {channels.shape}")
+    # data = np.moveaxis(channels, 0, -1)
+    # logger.info(f"INPUT TIF SHAPE {data.shape}")
+    # data = data.reshape(-1,4)
+    # logger.debug(data.shape)
+    # x = data[:, 1:]
+    # y = data[:, 0]
+    # logger.info(f" X SHAPE {x.shape}")
+    # logger.info(f" Y SHAPE {y.shape}")
+    # filename = "randomforest_20.pkl"
+    #
+    # loaded_model = pickle.load(open(filename, 'rb'))
+    # print(loaded_model)
+    # result = loaded_model.score(x,y)
+    # logger.info("score:\n%s", result)
+    # yhat = loaded_model.predict(x)
+    # yhat_img = yhat.reshape(1,128,128)
+    # print(yhat_img.shape)
+    #
+    # with rasterio.open("./tiles_256/tile_64_64.tiff") as src:
+    #     out_meta = src.meta
+    #     print(out_meta)
+    #
+    # out_meta.update({"driver": "GTiff",
+    #                  "count":1},
+    #                 nodata=0)
+    #
+    # with rasterio.open('tile4.tiff', "w", **out_meta) as dest:
+    #     dest.write(yhat_img)
+    #
+    # logger.debug("FINISHED")
+    # mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+    # logger.info("mse_loss: %s", mse_loss)
+    #
+    # return
+    with rasterio.open("/Users/zhamilya/Desktop/storage/data/files/area_final.tiff") as file:
+        channels = file.read()
 
-    def training_step(self, train_batch, batch_idx):
-        x, y, path = train_batch
-        logits = self(x)
-        loss = nn.MSELoss()(logits, y)
-        sch = self.lr_schedulers()
-        if (batch_idx + 1) % 4 == 0:
-            sch.step()
-        if self.trainer.is_last_batch and (self.trainer.current_epoch + 1) % 4 == 0:
-            sch.step()
-        wandb.log({"Training loss (average)": loss.detach().item()})
-        images = x, y, logits
-        wandb.log({f"Epoch worst": [wandb.Image(i) for i in images]})
+    logger.info(f"INPUT TIF SHAPE {channels.shape}")
+    data = np.moveaxis(channels, 0, -1)
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+    data = data.reshape(-1,5)
+    logger.debug(data.shape)
+    number_of_rows = data.shape[0]
+    random_indices = np.random.choice(number_of_rows, size=3511656, replace=False)
+    data = data[random_indices, :]
 
-        return loss
+    valid_pixels = ~np.isnan(data.sum(axis=1))  # .reshape(-1, 1)
+    print((valid_pixels==0).sum())
+    print(valid_pixels.shape)
 
-    def test_step(self, val_batch, batch_idx):
-        x, y, path = val_batch
-        logits = self(x)
-        loss = nn.MSELoss(logits, y)
-        wandb.log({"Test loss (average)": loss.detach().item()})
-        images = x, y, logits
-        wandb.log({f"Epoch worst": [wandb.Image(i) for i in images]})
-        return loss
+    # return
+    # data = data[:100000, ]
+    # valid_pixels = valid_pixels[:100000, ]
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
 
-    # def backward(self, trainer, loss, optimizer, optimizer_idx):
-    #     loss.backward()
+    X_train, X_test, y_train, y_test = train_test_split(data[valid_pixels, :3], data[valid_pixels, 4], test_size=0.1)
+    logger.info(f"TRAIN X SHAPE {X_train.shape}")
+    logger.info(f"TRAIN Y SHAPE {y_train.shape}")
+    logger.info(f"TEST X SHAPE {X_test.shape}")
+    logger.info(f"TEST Y SHAPE {y_test.shape}")
 
+    filename = "randomforest_10.pkl"
+    logger.info(filename)
 
+    # load the model from disk
+    loaded_model = pickle.load(open(filename, 'rb'))
+    print(loaded_model)
+    result = loaded_model.predict(X_test)
+    print(len(result))
 
-def run_forest_run(dm: DataModule):
-    # logger.setLevel(logging.DEBUG)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
-    logger.info("X_train.shape: %s", X_train.shape)
-    logger.info("X_test.shape: %s", X_test.shape)
-    regressor = RandomForestRegressor(verbose=True, n_jobs=-1, n_estimators=100)
+    return
+    # result = loaded_model.score(X_test, y_test)
+    # print(result)
+    # return
+
+    regressor = RandomForestRegressor(verbose=True, n_jobs=2, n_estimators=100, max_depth = 10)
+    logger.info("REGRESSOR FITTING STARTS")
     regressor.fit(X_train, y_train)
+    logger.info("REGRESSOR FITTING ENDS")
     yhat = regressor.predict(X_test)
+    logger.info("REGRESSOR PREDICTING ENDS")
     mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y_test))
     score = regressor.score(X_test, y_test)
     logger.info("score:\n%s", score)
     logger.info("mse_loss: %s", mse_loss)
-
+    filename = "randomforest_new.pkl"
+    pickle.dump(regressor, open(filename, 'wb'))
+    # predicted_ndvis = np.zeros(data.shape[0], 1) * np.nan
+    # predicted_ndvis[valid_pixels] = regressor.predict(data[valid_pixels])
 
     pass
 
 
 
-def main():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(device)
-
-    logger.info('Start')
-    TheDataset.read_tif()
-    logger.info("GLOBAL SCALING DONE.")
-
-
-    path = './tiles_256'
-    transform = A.Compose([
-        A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(),
-    ])
-
-    wandb.init(project="project_template", entity='zhami', config={
-        "learning_rate": 1e-2,
-        "architecture": "ResUnetPlusPlus",
-        "batch_size": 4})
-
-    dir = os.listdir(path)
-    train, test = train_test_split(dir, test_size=0.2)
-    logger.info("DATA LOADER STARTS")
-    train_load = DataModule(batch_size=wandb.config.batch_size, path = path, files=train, transform=transform)
-    run_forest_run(train_load)
-
-
-    train_dataloader = train_load.train_dataloader()
-    test_load = DataModule(batch_size=wandb.config.batch_size, path = path, files=test, transform=None)
-    test_dataloader = test_load.train_dataloader()
-    logger.info("DATA LOADER ENDS")
-    # logger.info("TRAIN ENUMERATING STARTS")
-    # for b, (x_train, y_train, path) in enumerate(train_dataloader):
-    #     x_train, y_train, path = x_train, y_train, path
-    # logger.info("TRAIN ENUMERATING ENDS")
-    # regressor = RandomForestRegressor(verbose=True, n_jobs=-1, n_estimators=500)
-    # regressor.fit(x_train, y_train)
-    # logger.info("TEST ENUMERATING STARTS")
-    # for b, (x_test,y_test, path) in enumerate(test_dataloader):
-    #     x_test, y_test, path = x_test,y_test, path
-    # logger.info("TEST ENUMERATING ENDS")
-    # yhat = regressor.predict(x_test)
-    # logger.info("TEST ENDS")
-    # mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y_test))
-    # score = regressor.score(x_test, y_test)
-    # logger.info("score:\n%s", score)
-    # logger.info("mse_loss: %s", mse_loss)
-    #
-    #
-    # return
-
-
-    wandb_logger = WandbLogger()  # newline 2
-    model = ResUnetPlusPlus(3,)
-    wandb.watch(model)
-    trainer = pl.Trainer(gpus=1, logger=wandb_logger)
-    trainer.fit(model, train_dataloader, test_dataloader)
-
-
-
-
-
 if __name__ == '__main__':
     main()
+
+

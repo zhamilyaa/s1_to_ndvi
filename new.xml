@@ -36,7 +36,7 @@
             <enl>1.0</enl>
             <numLooksStr>1</numLooksStr>
             <windowSize>7x7</windowSize>
-            <targetWindowSizeStr>5x5</targetWindowSizeStr>
+            <targetWindowSizeStr>3x3</targetWindowSizeStr>
             <sigmaStr>0.9</sigmaStr>
             <anSize>50</anSize>
         </parameters>
@@ -62,7 +62,7 @@
             <saveDEM>false</saveDEM>
             <saveLatLon>false</saveLatLon>
             <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
-            <saveLocalIncidenceAngle>true</saveLocalIncidenceAngle>
+            <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
             <saveProjectedLocalIncidenceAngle>false</saveProjectedLocalIncidenceAngle>
             <saveSelectedSourceBand>true</saveSelectedSourceBand>
             <outputComplex>false</outputComplex>
@@ -75,30 +75,6 @@
             <auxFile>Latest Auxiliary File</auxFile>
         </parameters>
     </node>
-
-    <node id="BandSelect0">
-        <operator>BandSelect</operator>
-        <sources>
-            <sourceProduct refid="Terrain-Correction"/>
-        </sources>
-        <parameters>
-            <selectedPolarisations/>
-            <sourceBands>localIncidenceAngle</sourceBands>
-            <bandNamePattern/>
-        </parameters>
-    </node>
-    <node id="Write">
-        <operator>Write</operator>
-        <sources>
-            <sourceProduct refid="BandSelect0"/>
-        </sources>
-        <parameters>
-            <file>${output_lia}</file>
-            <formatName>GeoTiff</formatName>
-        </parameters>
-
-    </node>
-
     <node id="LinearToFromdB">
         <operator>LinearToFromdB</operator>
         <sources>
@@ -166,6 +142,7 @@
         </parameters>
 
     </node>
+
 
     <node id="BandSelect1">
         <operator>BandSelect</operator>

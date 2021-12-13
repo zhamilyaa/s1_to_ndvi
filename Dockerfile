@@ -76,14 +76,16 @@ RUN poetry install
 COPY esa-snap_all_unix_8_0.sh /snap/esa-snap_all_unix_8_0.sh
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    python3-tk libtinfo5 &&\
-    cd /snap && chmod +x esa-snap_all_unix_8_0.sh && ./esa-snap_all_unix_8_0.sh -q && rm esa-snap_all_unix_8_0.sh
+    python3-tk libtinfo5 && \
+    cd / && chmod -R 777 /snap/ && cd /snap && chmod +x esa-snap_all_unix_8_0.sh && ./esa-snap_all_unix_8_0.sh -q && rm esa-snap_all_unix_8_0.sh
+#    cd /snap && chmod +x esa-snap_all_unix_8_0.sh && ./esa-snap_all_unix_8_0.sh -q && rm esa-snap_all_unix_8_0.sh
 
 COPY pyproject.toml poetry.lock ./
 RUN poetry install
 #RUN pip3 install --no-cache-dir torchvision==0.10.0+cu111 torchaudio==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html &&\
 #    pip3 install --no-cache-dir kedro
 
+RUN pip3 install torch
 #RUN pip3 install torch torchvision torchaudio
 
 

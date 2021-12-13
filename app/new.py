@@ -20,6 +20,7 @@ import json
 import shapely.wkt
 import shapely.geometry
 import hashlib
+from config import settings
 
 
 
@@ -36,10 +37,86 @@ from flask import Flask, render_template, request,render_template_string
 
 app = Flask(__name__)
 
+storage_folder = Path(settings.PROJECT.dirs.data_folder)
 
 @app.route('/')
 def form():
     return render_template('form.html')
+
+def do_s1_to_ndvi(geometry, zip_path):
+    polygon = shapely.wkt.loads(geometry)
+    new_name = hashlib.md5((str(zip_path)+str(polygon)).encode('utf-8')).hexdigest()
+    path = Path(__file__).absolute().parents[1]
+    vh_name = str(new_name)+'_vh.tif'
+    vv_name = str(new_name)+'_vv.tif'
+    nrpb_name = str(new_name)+'_nrpb.tif'
+    cropped = str(new_name)+'_cropped.tif'
+    wkt_to_geojson = str(new_name)+'.geojson'
+    vrt = str(new_name)+'.vrt'
+    result_image = str(new_name)+'_res.tif'
+
+    tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+    tiles_folder.mkdir(exist_ok=True)
+
+    preprocess = str("/opt/snap/bin/gpt") + " " + str(path.joinpath(
+        'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
+        zip_path) + " -Poutput_vh=" + str(tiles_folder.joinpath(vh_name)) + " -Poutput_vv=" + str(
+        tiles_folder.joinpath(vv_name)) + " -Poutput_nrpb=" + str(
+        tiles_folder.joinpath(nrpb_name))
+    os.system(preprocess)
+
+    merge_nodes = 'gdalbuildvrt -separate '+str(tiles_folder.joinpath(vrt))+' '+str(tiles_folder.joinpath(vh_name))+' '+str(tiles_folder.joinpath(vv_name))+' '+str(tiles_folder.joinpath(nrpb_name))
+    os.system(merge_nodes)
+
+    g2 = shapely.geometry.mapping(polygon)
+    with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
+        json.dump(g2, dst)
+
+    crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(wkt_to_geojson))+" "+str(tiles_folder.joinpath(vrt))+" "+str(tiles_folder.joinpath(cropped))
+    os.system(crop)
+
+    with rasterio.open(tiles_folder.joinpath(cropped)) as src:
+        out_meta = src.meta
+        img = src.read()
+        out_meta.update(nodata=0)
+        out_meta['crs'] = "EPSG:3857"
+        with rasterio.open(storage_folder.joinpath(cropped), 'w', **out_meta) as dst:
+            dst.write(img)
+
+    logger.info(f"INPUT TIF SHAPE {img.shape}")
+    data = np.moveaxis(img, 0, -1)
+    logger.info(f"INPUT TIF SHAPE {data.shape}")
+    data = data.reshape(-1,4)
+    logger.debug(data.shape)
+    x = data[:, 1:]
+    y = data[:, 0]
+    logger.info(f" X SHAPE {x.shape}")
+    logger.info(f" Y SHAPE {y.shape}")
+
+    filename = "randomforest_20.pkl"
+    loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
+
+    yhat = loaded_model.predict(x)
+    yhat_img = yhat.reshape(1,128,128)
+    print(yhat_img.shape)
+
+    out_meta.update({"driver": "GTiff",
+                     "count":1},
+                    nodata=0)
+
+    with rasterio.open(storage_folder.joinpath(result_image), "w", **out_meta) as dest:
+        dest.write(yhat_img)
+
+    logger.debug("FINISHED")
+    mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
+    logger.info("mse_loss: %s", mse_loss)
+
+    return
+
+@app.route('/app/v1/s1_to_ndvi', methods=['POST'])
+def perform_s1_to_ndvi():
+    form_data = request.json
+    return do_s1_to_ndvi(**form_data)
 
 @app.route('/data/', methods=['POST', 'GET'])
 def snap():
@@ -55,7 +132,7 @@ def snap():
 
         new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
         vh_name = str(new_name)+'_vh.tif'
-        vv_name = str(new_name)+'_vv.tif'
+        vv_name = str(new_name)+'_v v.tif'
         nrpb_name = str(new_name)+'_nrpb.tif'
         cropped = str(new_name)+'_cropped.tif'
         wkt_to_geojson = str(new_name)+'.geojson'
@@ -140,8 +217,13 @@ def snap():
         return
 
 def main():
+    geometry = 'MultiPolygon (((67.68462489838638874 53.80194293541246253, 67.92794889903467492 53.87629193561054564, 67.96850289914272025 53.68366043509732322, 67.72743189850044132 53.62395593493825174, 67.68462489838638874 53.80194293541246253)))'
+    zip_path = "/home/zhamilya/PycharmProjects/s1_to_ndvi/S1B_IW_GRDH_1SDV_20210609T014215_20210609T014240_027273_0341F1_B9D6.SAFE.zip"
+    do_s1_to_ndvi(geometry,zip_path)
     print("salem")
     return
+    app.run(host='0.0.0.0', port=5000)
+
     path = Path(__file__).absolute().parents[1]
     print(path)
 
@@ -261,7 +343,6 @@ def main():
 
     pass
 
-app.run(host='0.0.0.0', port=5000)
 
 
 if __name__ == '__main__':

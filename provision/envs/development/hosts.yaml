@@ -2,7 +2,7 @@ all:
   hosts:
     localhost:
       ansible_connection: local
-      ansible_python_interpreter: "/home/zhamilya/.cache/pypoetry/virtualenvs/sentinel-auXwJ914-py3.8/bin/python"
+      ansible_python_interpreter: "/home/zhamilya/.cache/pypoetry/virtualenvs/s1-to-ndvi-Pil7UAj9-py3.8/bin/python"
       project_folder: "{{playbook_dir|dirname|dirname}}"
   vars:
     env_name: "development"

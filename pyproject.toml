@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "sentinel"
+name = "s1_to_ndvi"
 version = "0.1.0"
 description = ""
 authors = ["zhamilya <zhamilya.saparova@nu.edu.kz>"]
@@ -27,7 +27,7 @@ python-dotenv = "^0.19.0"
 importlib-metadata = "^4.6.3"
 rasterio = "^1.2.6"
 geopandas = "^0.10.0"
-scikit-learn = "^1.0"
+scikit-learn = "*"
 matplotlib = "^3.4.3"
 # wandb = "^0.12.3"
 lgblkb-tools = "^2.1.0"
@@ -38,6 +38,7 @@ ortools = "9.1.9490"
 celery = "^5.1.2"
 redis = "^3.5.3"
 Flask = "^2.0.2"
+xgboost = "^1.5.1"
 
 
 [tool.poetry.dev-dependencies]
