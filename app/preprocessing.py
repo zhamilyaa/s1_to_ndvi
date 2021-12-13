@@ -83,24 +83,6 @@ def do_s1_to_ndvi(geometry, zip_path):
     return
 
 
-
-
-def salem():
-    image = '/Users/zhamilya/Desktop/storage/data/files/s2(copy).tiff'
-    image = '/Users/zhamilya/Desktop/storage/data/files/s2.tiff'
-    with rasterio.open(image) as src:
-        out_meta = src.meta
-        out_meta.update(nodata = 0.0)
-        res = src.read()
-        new = np.unique(res)
-        print(min(new))
-        res_new = np.where(res < 0, 0.0, res)
-        new = np.unique(res_new)
-        print(new)
-
-    with rasterio.open(image, 'w', **out_meta) as src:
-        src.write(np.array(res_new))
-
 def train():
     image = '/Users/zhamilya/Desktop/storage/data/5e4391ac5a5bf6bd8e7128ebabc7e561_preprocessed_images/training.tif'
     with rasterio.open(image) as file:
@@ -174,100 +156,6 @@ def train():
     # predicted_ndvis[valid_pixels] = regressor.predict(data[valid_pixels])
 
     return
-
-def acc():
-    image = '/Users/zhamilya/Desktop/storage/data/5e4391ac5a5bf6bd8e7128ebabc7e561_preprocessed_images/training.tif'
-    with rasterio.open(image) as file:
-        channels = file.read()
-
-    logger.info(f"INPUT TIF SHAPE {channels.shape}")
-    data = np.moveaxis(channels, 0, -1)
-    logger.info(f"INPUT TIF SHAPE {data.shape}")
-    data = data.reshape(-1,5)
-    logger.debug(data.shape)
-
-    logger.debug(data.shape)
-    number_of_rows = data.shape[0]
-    random_indices = np.random.choice(number_of_rows, size=data.shape[0], replace=False)
-    data = data[random_indices, :]
-
-    valid_pixels = ~np.isnan(data.sum(axis=1))  # .reshape(-1, 1)
-    print((valid_pixels==0).sum())
-    print(valid_pixels.shape)
-
-    logger.info(f"INPUT TIF SHAPE {data.shape}")
-
-    s1_b1 = data[valid_pixels, 0].reshape(-1,1)
-    s1_b2 = data[valid_pixels, 1].reshape(-1,1)
-    s1_b3 = data[valid_pixels, 2].reshape(-1,1)
-    s1_b4 = data[valid_pixels, 3].reshape(-1,1)
-
-    scaler_b1 = StandardScaler().fit(s1_b1)
-    scaler_b2 = StandardScaler().fit(s1_b2)
-    scaler_b3 = StandardScaler().fit(s1_b3)
-    scaler_b4 = StandardScaler().fit(s1_b4)
-
-    dump(scaler_b1, open('./scaler_b1.pkl', 'wb'))
-    dump(scaler_b2, open('./scaler_b2.pkl', 'wb'))
-    dump(scaler_b3, open('./scaler_b3.pkl', 'wb'))
-    dump(scaler_b4, open('./scaler_b4.pkl', 'wb'))
-
-    s1_b1_tensor = ((scaler_b1.transform(s1_b1)).reshape(-1, 1))
-    s1_b2_tensor = ((scaler_b2.transform(s1_b2)).reshape(-1, 1))
-    s1_b3_tensor = ((scaler_b3.transform(s1_b3)).reshape(-1, 1))
-    s1_b4_tensor = ((scaler_b4.transform(s1_b4)).reshape(-1, 1))
-
-    s2_b_tensor = data[valid_pixels, 4].reshape(-1,1)
-
-    s1 = np.concatenate((s1_b1_tensor, s1_b2_tensor,s1_b3_tensor, s1_b4_tensor), axis = 1)
-    s2 = s2_b_tensor
-
-    print(s1.shape, type(s1))
-    print(s2.shape, type(s2))
-
-
-    print("salem")
-    filename = "randomforest_slm2_100_25.pkl"
-    loaded_model = pickle.load(open(filename, 'rb'))
-    print(loaded_model)
-
-    yhat = loaded_model.predict(s1)
-    print(yhat.shape)
-
-    yhat_img = yhat.reshape(1,3998, 4177)
-    print(yhat_img.shape)
-
-    with rasterio.open(image) as src:
-        out_meta = src.meta
-        print(out_meta)
-
-    out_meta.update({"driver": "GTiff",
-                     "count":1},
-                    nodata=0)
-
-    with rasterio.open('test_sal.tiff', "w", **out_meta) as dest:
-        dest.write(yhat_img)
-
-
-    logger.debug("FINISHED")
-    yhat_img = yhat_img.reshape(16699646, 1)
-
-    mse_loss = nn.MSELoss()(torch.from_numpy(yhat_img), torch.from_numpy(s2))
-    logger.info("mse_loss: %s", mse_loss)
-
-    print(yhat_img.shape, type(yhat_img))
-    print(s2.shape, type(s2))
-    errors = yhat_img - s2
-    logger.info("mae: %s", (np.mean(errors)))
-
-    mae = mean_absolute_error(s2, yhat_img)
-    print("mae: ", mae)
-
-    mse = mean_squared_error(s2, yhat_img)
-    print("mae: ", mse)
-
-
-
 
 
 def test():
@@ -420,12 +308,7 @@ def train_xgboost():
 
 
 def main():
-    logger.debug("salem")
 
-    acc()
-
-    logger.debug("finished")
-    return
     logger.debug("salem")
 
     geometry = 'Polygon ((68.59442325395232842 53.98420560633174148, 68.62193240235221481 53.76255184966767331, 69.02234334017269646 53.74447955715930192, 69.01928676812825358 53.98600285712484492, 69.01928676812825358 53.98600285712484492, 68.59442325395232842 53.98420560633174148))'
@@ -434,115 +317,6 @@ def main():
     logger.debug("finished")
     return
 
-
-    with rasterio.open("/Users/zhamilya/Desktop/storage/data/files/area_final.tiff") as file:
-        channels = file.read()
-
-    logger.info(f"INPUT TIF SHAPE {channels.shape}")
-    data = np.moveaxis(channels, 0, -1)
-    logger.info(f"INPUT TIF SHAPE {data.shape}")
-    data = data.reshape(-1,5)
-    logger.debug(data.shape)
-    number_of_rows = data.shape[0]
-    random_indices = np.random.choice(number_of_rows, size=3511656, replace=False)
-    data = data[random_indices, :]
-
-    valid_pixels = ~np.isnan(data.sum(axis=1))  # .reshape(-1, 1)
-    print((valid_pixels==0).sum())
-    print(valid_pixels.shape)
-
-    # return
-    # data = data[:100000, ]
-    # valid_pixels = valid_pixels[:100000, ]
-    logger.info(f"INPUT TIF SHAPE {data.shape}")
-
-    s1_b1 = data[valid_pixels, 0].reshape(-1,1)
-    s1_b2 = data[valid_pixels, 1].reshape(-1,1)
-    s1_b3 = data[valid_pixels, 2].reshape(-1,1)
-    s1_b4 = data[valid_pixels, 3].reshape(-1,1)
-
-    # print("MIN s1_b1", min(s1_b1))
-    # print("MAX s1_b1", max(s1_b1))
-    # print(type(s1_b1))
-    # print(s1_b1.shape)
-    #
-    # print("MIN s1_b2", min(s1_b2))
-    # print("MAX s1_b2", max(s1_b2))
-    # print(type(s1_b2))
-    # print(s1_b2.shape)
-    #
-    # print("MIN s1_b3", min(s1_b3))
-    # print("MAX s1_b3", max(s1_b3))
-    # print(type(s1_b3))
-    # print(s1_b3.shape)
-    #
-    # print("MIN s1_b4", min(s1_b4))
-    # print("MAX s1_b4", max(s1_b4))
-    # print(type(s1_b4))
-    # print(s1_b4.shape)
-
-    scaler_b1 = StandardScaler().fit(s1_b1)
-    scaler_b2 = StandardScaler().fit(s1_b2)
-    scaler_b3 = StandardScaler().fit(s1_b3)
-    scaler_b4 = StandardScaler().fit(s1_b4)
-
-    dump(scaler_b1, open('./scaler_b1.pkl', 'wb'))
-    dump(scaler_b2, open('./scaler_b2.pkl', 'wb'))
-    dump(scaler_b3, open('./scaler_b3.pkl', 'wb'))
-    dump(scaler_b4, open('./scaler_b4.pkl', 'wb'))
-
-
-    scaler_b1 = load(open('scaler_b1.pkl', 'rb'))
-    scaler_b2 = load(open('scaler_b2.pkl', 'rb'))
-    scaler_b3 = load(open('scaler_b3.pkl', 'rb'))
-    scaler_b4 = load(open('scaler_b4.pkl', 'rb'))
-
-    s1_b1_tensor = ((scaler_b1.transform(s1_b1)).reshape(-1, 1))
-    s1_b2_tensor = ((scaler_b2.transform(s1_b2)).reshape(-1, 1))
-    s1_b3_tensor = ((scaler_b3.transform(s1_b3)).reshape(-1, 1))
-    s1_b4_tensor = ((scaler_b4.transform(s1_b4)).reshape(-1, 1))
-
-    # print("MIN s1_b1_tensor", min(s1_b1_tensor))
-    # print("MAX s1_b1_tensor", max(s1_b1_tensor))
-    # print(type(s1_b1_tensor))
-    # print(s1_b1_tensor.shape)
-    #
-    # print("MIN s1_b2_tensor", min(s1_b2_tensor))
-    # print("MAX s1_b2_tensor", max(s1_b2_tensor))
-    # print(type(s1_b2_tensor))
-    # print(s1_b2_tensor.shape)
-    #
-    # print("MIN s1_b3_tensor", min(s1_b3_tensor))
-    # print("MAX s1_b3_tensor", max(s1_b3_tensor))
-    # print(type(s1_b3_tensor))
-    # print(s1_b3_tensor.shape)
-    #
-    # print("MIN s1_b4_tensor", min(s1_b4_tensor))
-    # print("MAX s1_b4_tensor", max(s1_b4_tensor))
-    # print(type(s1_b4_tensor))
-    # print(s1_b4_tensor.shape)
-
-    s1 = np.concatenate((s1_b1_tensor, s1_b2_tensor, s1_b3_tensor, s1_b4_tensor), axis = 1)
-    print(s1.shape)
-    X_train, X_test, y_train, y_test = train_test_split(s1, data[valid_pixels, 4], test_size=0.1)
-    logger.info(f"TRAIN X SHAPE {X_train.shape}")
-    logger.info(f"TRAIN Y SHAPE {y_train.shape}")
-    logger.info(f"TEST X SHAPE {X_test.shape}")
-    logger.info(f"TEST Y SHAPE {y_test.shape}")
-
-    regressor = RandomForestRegressor(verbose=True, n_jobs=3, n_estimators=500, max_depth = 20)
-    logger.info("REGRESSOR FITTING STARTS")
-    regressor.fit(X_train, y_train)
-    logger.info("REGRESSOR FITTING ENDS")
-    yhat = regressor.predict(X_test)
-    logger.info("REGRESSOR PREDICTING ENDS")
-    mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y_test))
-    score = regressor.score(X_test, y_test)
-    logger.info("score:\n%s", score)
-    logger.info("mse_loss: %s", mse_loss)
-    filename = "randomforest_new_2.pkl"
-    pickle.dump(regressor, open(filename, 'wb'))
-    return
 
 if __name__ == '__main__':
     main()
