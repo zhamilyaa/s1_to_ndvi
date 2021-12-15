@@ -13,6 +13,6 @@ $ ./esa-snap_sentinel_unix_4_0.sh
  
 And then you need to specify gpt folder in the code. 
 
-For processing S2, sen2cor must be downloaded from http://step.esa.int/main/snap-supported-plugins/sen2cor/sen2cor-v2-9/ 
-Also, you can follow this tutorial to preprocess S2 https://www.youtube.com/watch?v=1F37ScOrKqM 
+For processing S2, sen2cor must be downloaded from http://step.esa.int/main/snap-supported-plugins/sen2cor/sen2cor-v2-9/      
+Also, you can follow this tutorial to preprocess S2 https://www.youtube.com/watch?v=1F37ScOrKqM      
 
