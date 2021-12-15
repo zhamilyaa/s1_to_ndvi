@@ -31,18 +31,6 @@ handler.setFormatter(formatter)
 logger.addHandler(handler)
 storage_folder = Path(settings.PROJECT.dirs.data_folder)
 
-# # Converts wkt to geojson
-# def wkt_to_geojson(geometry):
-#
-#     polygon = shapely.wkt.loads(geometry)
-#     new_name = 'salem'
-#     tiles_folder = Path(storage_folder.joinpath(str('415996db3e0605e6a93ac2e7b565ebc4')+'_preprocessed_images')).absolute()
-#     wkt_to_geojson = str(new_name)+'.geojson'
-#     g2 = shapely.geometry.mapping(polygon)
-#     with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
-#         json.dump(g2, dst)
-#     logger.debug("cool")
-#     return
 
 # INPUT: geometry -> in wkt, zip_path -> S1.SAFE file path
 # OUTPUT: path to preprocessed cropped S1 images in tif
