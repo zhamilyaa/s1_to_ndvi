@@ -30,21 +30,22 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 storage_folder = Path(settings.PROJECT.dirs.data_folder)
-# storage_folder = './'
 
-def wkt_to_geojson(geometry):
+# # Converts wkt to geojson
+# def wkt_to_geojson(geometry):
+#
+#     polygon = shapely.wkt.loads(geometry)
+#     new_name = 'salem'
+#     tiles_folder = Path(storage_folder.joinpath(str('415996db3e0605e6a93ac2e7b565ebc4')+'_preprocessed_images')).absolute()
+#     wkt_to_geojson = str(new_name)+'.geojson'
+#     g2 = shapely.geometry.mapping(polygon)
+#     with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
+#         json.dump(g2, dst)
+#     logger.debug("cool")
+#     return
 
-    polygon = shapely.wkt.loads(geometry)
-    new_name = 'salem'
-    tiles_folder = Path(storage_folder.joinpath(str('415996db3e0605e6a93ac2e7b565ebc4')+'_preprocessed_images')).absolute()
-    wkt_to_geojson = str(new_name)+'.geojson'
-    g2 = shapely.geometry.mapping(polygon)
-    with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
-        json.dump(g2, dst)
-    logger.debug("cool")
-    return
-
-
+# INPUT: geometry -> in wkt, zip_path -> S1.SAFE file path
+# OUTPUT: path to preprocessed cropped S1 images in tif
 def do_s1_to_ndvi(geometry, zip_path):
     polygon = shapely.wkt.loads(geometry)
 
@@ -52,6 +53,7 @@ def do_s1_to_ndvi(geometry, zip_path):
 
     path = Path(__file__).absolute().parents[1]
 
+    # just names of the files
     vh_name = str(new_name)+'_vh.tif'
     vv_name = str(new_name)+'_vv.tif'
     nrpb_name = str(new_name)+'_nrpb.tif'
@@ -59,11 +61,12 @@ def do_s1_to_ndvi(geometry, zip_path):
     cropped = str(new_name)+'_cropped_new_area.tif'
     wkt_to_geojson = str(new_name)+'.geojson'
     vrt = str(new_name)+'.vrt'
-    result_image = str(new_name)+'_res.tif'
 
+    # creating working folder
     tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
     tiles_folder.mkdir(exist_ok=True)
 
+    # processing S1
     preprocess = str("/opt/snap/bin/gpt") + " " + str(path.joinpath(
         'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=30 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
         zip_path) + " -Poutput_vh=" + str(tiles_folder.joinpath(vh_name)) + " -Poutput_vv=" + str(
@@ -71,26 +74,33 @@ def do_s1_to_ndvi(geometry, zip_path):
         tiles_folder.joinpath(nrpb_name)) + " -Poutput_lia=" + str(tiles_folder.joinpath(lia_name))
     os.system(preprocess)
 
+    # creating vrt file from processed S1 images
     merge_nodes = 'gdalbuildvrt -separate '+str(tiles_folder.joinpath(vrt))+' '+str(tiles_folder.joinpath(vh_name))+' '+str(tiles_folder.joinpath(vv_name))+' '+str(tiles_folder.joinpath(nrpb_name))+' '+str(tiles_folder.joinpath(lia_name))
     os.system(merge_nodes)
 
+    # converting wkt to geojson
     g2 = shapely.geometry.mapping(polygon)
     with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
         json.dump(g2, dst)
 
+    # cropping ROI from S1 vrt
     crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(wkt_to_geojson))+" "+str(tiles_folder.joinpath(vrt))+" "+str(tiles_folder.joinpath(cropped))+" -t_srs EPSG:3857 -dstnodata 0"
     os.system(crop)
     return str(tiles_folder.joinpath(cropped))
 
 
-# ndvi_path = path to prepared ndvi tif, geom_path = path to geojson, new_name = encoded hashlib name (zip+polygon), cropped_path = output of do_s1_to_ndvi
+# INPUT: ndvi_path -> path to prepared ndvi tif, geom_path -> path to geojson, new_name -> encoded hashlib name (zip+polygon), cropped_path -> output of do_s1_to_ndvi
+# OUTPUT: path to image for training which consist of 5 bands (S1 bands: vh,vv,nrpb, lia and S2 band: ndvi, respectively)
 def s2_preparation(ndvi_path, geom_path, new_name, cropped_path):
+    # entering the same working folder
     tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+
+    # cropping ROI from NDVI
     cropped_ndvi = cropped_path.split(".")[0]+"_cropped_ndvi.tif"
     crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(geom_path))+" "+str(tiles_folder.joinpath(ndvi_path))+" "+str(tiles_folder.joinpath(cropped_ndvi))+" -t_srs EPSG:3857 -dstnodata 0"
     os.system(crop)
 
-    # create separate tifs for vh,vv,nrpb and lia
+    # creating separate tifs for vh,vv,nrpb and lia to create further vrt file with separate bands
     vh_path = cropped_path.split(".")[0]+"_vh.tif"
     vv_path = cropped_path.split(".")[0]+"_vv.tif"
     nrpb_path = cropped_path.split(".")[0]+"_nrpb.tif"
@@ -105,11 +115,12 @@ def s2_preparation(ndvi_path, geom_path, new_name, cropped_path):
     lia = f'gdal_translate {cropped_path} -b {int(4)} {lia_path}'
     os.system(lia)
 
-    # gdalbuildvrt separate each band now including ndvi
+    # gdalbuildvrt separate each band, now including ndvi
     img_train_vrt_path = cropped_path.split(".")[0]+"_train.vrt"
     img_train_vrt = f'gdalbuildvrt -separate {img_train_vrt_path} {vh_path} {vv_path} {nrpb_path} {lia_path} {cropped_ndvi}'
     os.system(img_train_vrt)
-    # vrt to tif
+
+    # training vrt to training tif
     img_train_path = cropped_path.split(".")[0]+"_train.tif"
     img_train = f'gdal_translate {img_train_vrt_path} {img_train_path}'
     os.system(img_train)
@@ -188,9 +199,7 @@ def train(img_train_path):
 
     return
 
-
 def test(img_test_path):
-    img_test_path = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/testing_data_upd.tif'
     with rasterio.open(img_test_path) as file:
         channels = file.read()
 
@@ -266,7 +275,6 @@ def test(img_test_path):
     # logger.info("mse_loss: %s", mse_loss)
 
 def train_xgboost(img_train_path):
-    img_train_path = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/training_data.tif'
     with rasterio.open(img_train_path) as file:
         channels = file.read()
 
