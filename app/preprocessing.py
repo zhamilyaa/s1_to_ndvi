@@ -80,12 +80,43 @@ def do_s1_to_ndvi(geometry, zip_path):
 
     crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(wkt_to_geojson))+" "+str(tiles_folder.joinpath(vrt))+" "+str(tiles_folder.joinpath(cropped))+" -t_srs EPSG:3857 -dstnodata 0"
     os.system(crop)
-    return
+    return str(tiles_folder.joinpath(cropped))
 
 
-def train():
-    image = '/Users/zhamilya/Desktop/storage/data/5e4391ac5a5bf6bd8e7128ebabc7e561_preprocessed_images/training.tif'
-    with rasterio.open(image) as file:
+# ndvi_path = path to prepared ndvi tif, geom_path = path to geojson, new_name = encoded hashlib name (zip+polygon), cropped_path = output of do_s1_to_ndvi
+def s2_preparation(ndvi_path, geom_path, new_name, cropped_path):
+    tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+    cropped_ndvi = cropped_path.split(".")[0]+"_cropped_ndvi.tif"
+    crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(geom_path))+" "+str(tiles_folder.joinpath(ndvi_path))+" "+str(tiles_folder.joinpath(cropped_ndvi))+" -t_srs EPSG:3857 -dstnodata 0"
+    os.system(crop)
+
+    # create separate tifs for vh,vv,nrpb and lia
+    vh_path = cropped_path.split(".")[0]+"_vh.tif"
+    vv_path = cropped_path.split(".")[0]+"_vv.tif"
+    nrpb_path = cropped_path.split(".")[0]+"_nrpb.tif"
+    lia_path = cropped_path.split(".")[0]+"_lia.tif"
+
+    vh = f'gdal_translate {cropped_path} -b {int(1)} {vh_path}'
+    os.system(vh)
+    vv = f'gdal_translate {cropped_path} -b {int(2)} {vv_path}'
+    os.system(vv)
+    nrpb = f'gdal_translate {cropped_path} -b {int(3)} {nrpb_path}'
+    os.system(nrpb)
+    lia = f'gdal_translate {cropped_path} -b {int(4)} {lia_path}'
+    os.system(lia)
+
+    # gdalbuildvrt separate each band now including ndvi
+    img_train_vrt_path = cropped_path.split(".")[0]+"_train.vrt"
+    img_train_vrt = f'gdalbuildvrt -separate {img_train_vrt_path} {vh_path} {vv_path} {nrpb_path} {lia_path} {cropped_ndvi}'
+    os.system(img_train_vrt)
+    # vrt to tif
+    img_train_path = cropped_path.split(".")[0]+"_train.tif"
+    img_train = f'gdal_translate {img_train_vrt_path} {img_train_path}'
+    os.system(img_train)
+    return str(img_train)
+
+def train(img_train_path):
+    with rasterio.open(img_train_path) as file:
         channels = file.read()
 
     logger.info(f"INPUT TIF SHAPE {channels.shape}")
@@ -158,9 +189,9 @@ def train():
     return
 
 
-def test():
-    image = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/testing_data_upd.tif'
-    with rasterio.open(image) as file:
+def test(img_test_path):
+    img_test_path = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/testing_data_upd.tif'
+    with rasterio.open(img_test_path) as file:
         channels = file.read()
 
     logger.info(f"INPUT TIF SHAPE {channels.shape}")
@@ -209,17 +240,17 @@ def test():
     # x = s1
 
     print("salem")
-    filename = "randomforest_slm2_100_25.pkl"
+    filename = "randomforest_slm.pkl"
     loaded_model = pickle.load(open(filename, 'rb'))
     print(loaded_model)
 
     yhat = loaded_model.predict(x)
     print(yhat.shape)
 
-    yhat_img = yhat.reshape(1,3533, 3419)
+    yhat_img = yhat.reshape(1,channels.shape[1], channels.shape[-1])
     print(yhat_img.shape)
 
-    with rasterio.open(image) as src:
+    with rasterio.open(img_test_path) as src:
         out_meta = src.meta
         print(out_meta)
 
@@ -230,14 +261,13 @@ def test():
     with rasterio.open('test6.tiff', "w", **out_meta) as dest:
         dest.write(yhat_img)
 
-
     logger.debug("FINISHED")
     # mse_loss = nn.MSELoss()(torch.from_numpy(yhat_img), torch.from_numpy(y))
     # logger.info("mse_loss: %s", mse_loss)
 
-def train_xgboost():
-    image = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/training_data.tif'
-    with rasterio.open(image) as file:
+def train_xgboost(img_train_path):
+    img_train_path = '/Users/zhamilya/Desktop/storage/data/a66e3b2971da2cb736b3b124ab07d40c_preprocessed_images/training_data.tif'
+    with rasterio.open(img_train_path) as file:
         channels = file.read()
 
     logger.info(f"INPUT TIF SHAPE {channels.shape}")
@@ -248,7 +278,7 @@ def train_xgboost():
 
     logger.debug(data.shape)
     number_of_rows = data.shape[0]
-    random_indices = np.random.choice(number_of_rows, size=10887084, replace=False)
+    random_indices = np.random.choice(number_of_rows, size=data.shape[0], replace=False)
     data = data[random_indices, :]
 
     valid_pixels = ~np.isnan(data.sum(axis=1))  # .reshape(-1, 1)
@@ -310,10 +340,30 @@ def train_xgboost():
 def main():
 
     logger.debug("salem")
+    img_train_path = '/Users/zhamilya/Desktop/storage/data/ee73d2748fb6e51fb0f6b30f1f5f9eed_preprocessed_images/ee73d2748fb6e51fb0f6b30f1f5f9eed_cropped_new_area_train.tif'
+    train(img_train_path)
+    return
+    geom = 'Polygon ((67.52635263107102048 54.09302907069736222, 67.52635263107102048 54.09302907069736222, 67.56743967260906913 53.20844923523117131, 67.56743967260906913 53.20844923523117131, 69.10699528788765633 53.20361546563846389, 69.10699528788765633 53.20361546563846389, 69.09732774870224148 54.0906121859010085, 69.09732774870224148 54.0906121859010085, 67.52635263107102048 54.09302907069736222))'
 
-    geometry = 'Polygon ((68.59442325395232842 53.98420560633174148, 68.62193240235221481 53.76255184966767331, 69.02234334017269646 53.74447955715930192, 69.01928676812825358 53.98600285712484492, 69.01928676812825358 53.98600285712484492, 68.59442325395232842 53.98420560633174148))'
     zip_path = '/home/zhamilya/PycharmProjects/s1_to_ndvi/S1B_IW_GRDH_1SDV_20210609T014215_20210609T014240_027273_0341F1_B9D6.SAFE'
-    do_s1_to_ndvi(geometry, zip_path)
+
+    polygon = shapely.wkt.loads(geom)
+
+    new_name = hashlib.md5((str(zip_path)+str(polygon)).encode('utf-8')).hexdigest()
+    cropped = str(new_name)+'_cropped_new_area.tif'
+    salem = cropped.split(".")[0]+"_vh.tif"
+    print(salem)
+
+    ndvi_path = '/Users/zhamilya/Desktop/storage/data/ee73d2748fb6e51fb0f6b30f1f5f9eed_preprocessed_images/ndvi.tif'
+    geom_path = '/Users/zhamilya/Desktop/storage/data/ee73d2748fb6e51fb0f6b30f1f5f9eed_preprocessed_images/ee73d2748fb6e51fb0f6b30f1f5f9eed.geojson'
+    cropped = '/Users/zhamilya/Desktop/storage/data/ee73d2748fb6e51fb0f6b30f1f5f9eed_preprocessed_images/ee73d2748fb6e51fb0f6b30f1f5f9eed_cropped_new_area.tif'
+    s2_preparation(ndvi_path, geom_path, new_name, cropped)
+    return
+    geometry = 'Polygon ((68.59442325395232842 53.98420560633174148, 68.62193240235221481 53.76255184966767331, 69.02234334017269646 53.74447955715930192, 69.01928676812825358 53.98600285712484492, 69.01928676812825358 53.98600285712484492, 68.59442325395232842 53.98420560633174148))'
+    geom = 'Polygon ((67.52635263107102048 54.09302907069736222, 67.52635263107102048 54.09302907069736222, 67.56743967260906913 53.20844923523117131, 67.56743967260906913 53.20844923523117131, 69.10699528788765633 53.20361546563846389, 69.10699528788765633 53.20361546563846389, 69.09732774870224148 54.0906121859010085, 69.09732774870224148 54.0906121859010085, 67.52635263107102048 54.09302907069736222))'
+
+    zip_path = '/home/zhamilya/PycharmProjects/s1_to_ndvi/S1B_IW_GRDH_1SDV_20210609T014215_20210609T014240_027273_0341F1_B9D6.SAFE'
+    do_s1_to_ndvi(geom, zip_path)
     logger.debug("finished")
     return
 
