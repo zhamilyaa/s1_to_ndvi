@@ -18,5 +18,5 @@ Also, you can follow this tutorial to preprocess S2 https://www.youtube.com/watc
 
 Based on the paper "Crop NDVI Monitoring Based on Sentinel 1" by Filgueiras et al. (doi: 10.3390/rs11121441):
 ```
-file:///tmp/mozilla_zhamilya0/remotesensing-11-01441.pdf
+https://www.mdpi.com/2072-4292/11/12/1441
 ```
