@@ -16,3 +16,7 @@ And then you need to specify gpt folder in the code.
 For processing S2, sen2cor must be downloaded from http://step.esa.int/main/snap-supported-plugins/sen2cor/sen2cor-v2-9/      
 Also, you can follow this tutorial to preprocess S2 https://www.youtube.com/watch?v=1F37ScOrKqM      
 
+Based on the paper "Crop NDVI Monitoring Based on Sentinel 1" by Filgueiras et al. (doi: 10.3390/rs11121441):
+```
+file:///tmp/mozilla_zhamilya0/remotesensing-11-01441.pdf
+```
