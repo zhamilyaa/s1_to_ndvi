@@ -1,28 +1,26 @@
-import numpy as np
-import rasterio
-import logging
-from sklearn.model_selection import train_test_split
+from flask import Flask, render_template, render_template_string, request
+from pathlib import Path
+from shapely.geometry import box, GeometryCollection, MultiPolygon, Point, Polygon
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
 from torch import nn
-import torch
+
+import fiona
+import geopandas
+import hashlib
+import json
+import logging
+import numpy as np
+import os
 import pickle
 import random
-import rasterio as rio
-import os
-from shapely.geometry import box, Polygon, MultiPolygon, GeometryCollection, Point
-import geopandas
-from pathlib import Path
-import fiona
-import rasterio.mask
-import os
 import rasterio
-import json
+import rasterio.mask
 import shapely.wkt
 import shapely.geometry
-import hashlib
+import torch
+
 from config import settings
-
-
 
 
 logger = logging.getLogger(__name__)
@@ -32,49 +30,54 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-
-from flask import Flask, render_template, request,render_template_string
-
 app = Flask(__name__)
 
 storage_folder = Path(settings.PROJECT.dirs.data_folder)
+
 
 @app.route('/')
 def form():
     return render_template('form.html')
 
+
 def do_s1_to_ndvi(geometry, zip_path):
     polygon = shapely.wkt.loads(geometry)
-    new_name = hashlib.md5((str(zip_path)+str(polygon)).encode('utf-8')).hexdigest()
+    new_name = hashlib.md5((str(zip_path) + str(polygon)).encode('utf-8')).hexdigest()
     path = Path(__file__).absolute().parents[1]
-    vh_name = str(new_name)+'_vh.tif'
-    vv_name = str(new_name)+'_vv.tif'
-    nrpb_name = str(new_name)+'_nrpb.tif'
-    lia_name = str(new_name)+'_lia.tif'
-    cropped = str(new_name)+'_cropped.tif'
-    wkt_to_geojson = str(new_name)+'.geojson'
-    vrt = str(new_name)+'.vrt'
-    result_image = str(new_name)+'_res.tif'
+    vh_name = str(new_name) + '_vh.tif'
+    vv_name = str(new_name) + '_vv.tif'
+    nrpb_name = str(new_name) + '_nrpb.tif'
+    lia_name = str(new_name) + '_lia.tif'
+    cropped = str(new_name) + '_cropped.tif'
+    wkt_to_geojson = str(new_name) + '.geojson'
+    vrt = str(new_name) + '.vrt'
+    result_image = str(new_name) + '_res.tif'
 
-    tiles_folder = Path(storage_folder.joinpath(str(new_name)+'_preprocessed_images')).absolute()
+    tiles_folder = Path(storage_folder.joinpath(str(new_name) + '_preprocessed_images')).absolute()
     tiles_folder.mkdir(exist_ok=True)
 
     preprocess = str("/opt/snap/bin/gpt") + " " + str(path.joinpath(
-        'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=30 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
-        zip_path) + " -Poutput_vh=" + str(tiles_folder.joinpath(vh_name)) + " -Poutput_vv=" + str(
-        tiles_folder.joinpath(vv_name)) + " -Poutput_nrpb=" + str(
-        tiles_folder.joinpath(nrpb_name))+ " -Poutput_lia=" + str(
-        tiles_folder.joinpath(lia_name))
+        'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=30 -Pcrs='GEOGCS[" \
+                 + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + \
+                 ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + \
+                 ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + \
+                 ", NORTH]]' -Ssource=" + str(zip_path) + " -Poutput_vh=" + str(tiles_folder.joinpath(vh_name)) + \
+                 " -Poutput_vv=" + str(tiles_folder.joinpath(vv_name)) + " -Poutput_nrpb=" + \
+                 str(tiles_folder.joinpath(nrpb_name)) + " -Poutput_lia=" + str(tiles_folder.joinpath(lia_name))
     os.system(preprocess)
 
-    merge_nodes = 'gdalbuildvrt -separate '+str(tiles_folder.joinpath(vrt))+' '+str(tiles_folder.joinpath(vh_name))+' '+str(tiles_folder.joinpath(vv_name))+' '+str(tiles_folder.joinpath(nrpb_name))+' '+str(tiles_folder.joinpath(lia_name))
+    merge_nodes = 'gdalbuildvrt -separate ' + str(tiles_folder.joinpath(vrt)) + ' ' + \
+                  str(tiles_folder.joinpath(vh_name)) + ' '+str(tiles_folder.joinpath(vv_name)) + ' ' + \
+                  str(tiles_folder.joinpath(nrpb_name)) + ' ' + str(tiles_folder.joinpath(lia_name))
     os.system(merge_nodes)
 
     g2 = shapely.geometry.mapping(polygon)
+    
     with open(tiles_folder.joinpath(wkt_to_geojson), 'w') as dst:
         json.dump(g2, dst)
 
-    crop = "gdalwarp -crop_to_cutline -cutline "+str(tiles_folder.joinpath(wkt_to_geojson))+" "+str(tiles_folder.joinpath(vrt))+" "+str(tiles_folder.joinpath(cropped))
+    crop = "gdalwarp -crop_to_cutline -cutline " + str(tiles_folder.joinpath(wkt_to_geojson)) + " " + \
+           str(tiles_folder.joinpath(vrt)) + " " + str(tiles_folder.joinpath(cropped))
     os.system(crop)
 
     with rasterio.open(tiles_folder.joinpath(cropped)) as src:
@@ -82,13 +85,14 @@ def do_s1_to_ndvi(geometry, zip_path):
         img = src.read()
         out_meta.update(nodata=0)
         out_meta['crs'] = "EPSG:3857"
+        
         with rasterio.open(storage_folder.joinpath(cropped), 'w', **out_meta) as dst:
             dst.write(img)
 
     logger.info(f"INPUT TIF SHAPE {img.shape}")
     data = np.moveaxis(img, 0, -1)
     logger.info(f"INPUT TIF SHAPE {data.shape}")
-    data = data.reshape(-1,4)
+    data = data.reshape(-1, 4)
     logger.debug(data.shape)
     x = data[:, 1:]
     y = data[:, 0]
@@ -99,12 +103,13 @@ def do_s1_to_ndvi(geometry, zip_path):
     loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
 
     yhat = loaded_model.predict(x)
-    yhat_img = yhat.reshape(1,128,128)
+    yhat_img = yhat.reshape(1, 128, 128)
     print(yhat_img.shape)
 
-    out_meta.update({"driver": "GTiff",
-                     "count":1},
-                    nodata=0)
+    out_meta.update({
+        "driver": "GTiff",
+        "count": 1
+    }, nodata=0)
 
     with rasterio.open(storage_folder.joinpath(result_image), "w", **out_meta) as dest:
         dest.write(yhat_img)
@@ -113,110 +118,14 @@ def do_s1_to_ndvi(geometry, zip_path):
     mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
     logger.info("mse_loss: %s", mse_loss)
 
-    return
+    return storage_folder.joinpath(result_image)
+
 
 @app.route('/app/v1/s1_to_ndvi', methods=['POST'])
 def perform_s1_to_ndvi():
     form_data = request.json
     return do_s1_to_ndvi(**form_data)
 
-# @app.route('/data/', methods=['POST', 'GET'])
-# def snap():
-#     if request.method == 'GET':
-#         return f"The URL /data is accessed directly. Try going to '/form' to submit form"
-#     if request.method == 'POST':
-#         form_data = request.form
-#         logger.debug('Start')
-#         zipfile = form_data["SAFE.zip File Path"]
-#         wkt = form_data["WKT"]
-#
-#         path = Path(__file__).absolute().parents[1]
-#
-#         new_name = hashlib.md5(str(zipfile).encode('utf-8')).hexdigest()
-#         vh_name = str(new_name)+'_vh.tif'
-#         vv_name = str(new_name)+'_v v.tif'
-#         nrpb_name = str(new_name)+'_nrpb.tif'
-#         cropped = str(new_name)+'_cropped.tif'
-#         wkt_to_geojson = str(new_name)+'.geojson'
-#         vrt = str(new_name)+'.vrt'
-#         result_image = str(new_name)+'_res.tif'
-#         processed_images = 'processed_images'
-#         if not os.path.exists(processed_images):
-#             os.mkdir(processed_images, mode=0o755)
-#         preprocess = str(path.joinpath("bin/gpt")) + " " + str(path.joinpath(
-#             'preprocessing.xml')) + " -Pfilter='Lee' -Porigin=10 -Pdem='SRTM 1Sec HGT' -Presolution=10 -Pcrs='GEOGCS[" + '"WGS84(DD)"' + ", DATUM[" + '"WGS84"' + ", SPHEROID[" + '"WGS84"' + ", 6378137.0, 298.257223563]], PRIMEM[" + '"Greenwich"' + ", 0.0], UNIT[" + '"degree"' + ", 0.017453292519943295], AXIS[" + '"Geodetic longitude"' + ", EAST], AXIS[" + '"Geodetic latitude"' + ", NORTH]]' -Ssource=" + str(
-#             zipfile) + " -Poutput_vh=" + str(path.joinpath(processed_images).joinpath(vh_name)) + " -Poutput_vv=" + str(
-#             path.joinpath(processed_images).joinpath(vv_name)) + " -Poutput_nrpb=" + str(
-#             path.joinpath(processed_images).joinpath(nrpb_name))
-#         os.system(preprocess)
-#
-#         vrt_path = 'vrt'
-#         if not os.path.exists(vrt_path):
-#             os.mkdir(vrt_path, mode=0o755)
-#         merge = 'gdalbuildvrt -separate '+str(path.joinpath(vrt_path).joinpath(vrt))+' '+str(path.joinpath(processed_images).joinpath(vh_name))+' '+str(path.joinpath(processed_images).joinpath(vv_name))+' '+str(path.joinpath(processed_images).joinpath(nrpb_name))
-#         os.system(merge)
-#
-#         wkt_path = 'wkt'
-#         if not os.path.exists(wkt_path):
-#             os.mkdir(wkt_path, mode=0o755)
-#         g1 = shapely.wkt.loads(wkt)
-#         print(g1)
-#         g2 = shapely.geometry.mapping(g1)
-#         print(g2)
-#         with open(path.joinpath(wkt_path).joinpath(wkt_to_geojson), 'w') as dst:
-#             json.dump(g2, dst)
-#
-#         results_path = 'results'
-#         if not os.path.exists(results_path):
-#             os.mkdir(results_path, mode=0o755)
-#         crop = "gdalwarp -crop_to_cutline -cutline "+str(path.joinpath(wkt_path).joinpath(wkt_to_geojson))+" "+str(path.joinpath(vrt_path).joinpath(vrt))+" "+str(path.joinpath(results_path).joinpath(cropped))
-#         os.system(crop)
-#
-#         with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as src:
-#             out_meta = src.meta
-#             img = src.read()
-#             out_meta.update(nodata=0)
-#             out_meta['crs'] = "EPSG:3857"
-#             print(out_meta)
-#             with rasterio.open(path.joinpath(results_path).joinpath(cropped), 'w', **out_meta) as dst:
-#                 dst.write(img)
-#
-#         ## PREPROCESSING FINISHES HERE
-#
-#         with rasterio.open(path.joinpath(results_path).joinpath(cropped)) as file:
-#             channels = file.read()
-#             out_meta = src.meta
-#
-#
-#         logger.info(f"INPUT TIF SHAPE {channels.shape}")
-#         data = np.moveaxis(channels, 0, -1)
-#         logger.info(f"INPUT TIF SHAPE {data.shape}")
-#         data = data.reshape(-1,4)
-#         logger.debug(data.shape)
-#         x = data[:, 1:]
-#         y = data[:, 0]
-#         logger.info(f" X SHAPE {x.shape}")
-#         logger.info(f" Y SHAPE {y.shape}")
-#         filename = "randomforest_20.pkl"
-#
-#         loaded_model = pickle.load(open(path.joinpath(filename), 'rb'))
-#
-#         yhat = loaded_model.predict(x)
-#         yhat_img = yhat.reshape(1,128,128)
-#         print(yhat_img.shape)
-#
-#         out_meta.update({"driver": "GTiff",
-#                          "count":1},
-#                         nodata=0)
-#
-#         with rasterio.open(path.joinpath(result_image), "w", **out_meta) as dest:
-#             dest.write(yhat_img)
-#
-#         logger.debug("FINISHED")
-#         mse_loss = nn.MSELoss()(torch.from_numpy(yhat), torch.from_numpy(y))
-#         logger.info("mse_loss: %s", mse_loss)
-#
-#         return
 
 def main():
     # # TESTING
@@ -415,10 +324,3 @@ def main():
     # predicted_ndvis[valid_pixels] = regressor.predict(data[valid_pixels])
 
     pass
-
-
-
-if __name__ == '__main__':
-    main()
-
-

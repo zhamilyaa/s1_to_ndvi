@@ -5,13 +5,13 @@ docker run  \
 	--volume "/etc/passwd:/etc/passwd:ro"  \
 	--volume "/etc/shadow:/etc/shadow:ro"  \
 	--volume "/etc/sudoers.d:/etc/sudoers.d:ro"  \
-	--env ENV_FOR_DYNACONF=development  \
+	--env ENV_FOR_DYNACONF=production  \
 	--env C_FORCE_ROOT=1  \
-	--env MPLCONFIGDIR=/Users/zhamilya/Desktop/storage/caches  \
+	--env MPLCONFIGDIR=/mnt/efs/fs1/caches  \
 	--env GDAL_CACHEMAX=256  \
 	--env NUMEXPR_MAX_THREADS=8  \
 	--network s1_to_ndvi_network  \
-	--volume /Users/zhamilya/Desktop/storage/caches:/Users/zhamilya/Desktop/storage/caches  \
-	--volume /Users/zhamilya/Desktop/storage/data:/Users/zhamilya/Desktop/storage/data  \
-	--volume /home/zhamilya/PycharmProjects/s1_to_ndvi:/home/zhamilya/PycharmProjects/s1_to_ndvi  \
-	--workdir /home/zhamilya/PycharmProjects/s1_to_ndvi "$@"
+	--volume /mnt/efs/fs1/caches:/mnt/efs/fs1/caches  \
+	--volume /nfs/storage/data:/nfs/storage/data  \
+	--volume /home/ubuntu/egistic/s1_to_ndvi:/home/ubuntu/egistic/s1_to_ndvi  \
+	--workdir /home/ubuntu/egistic/s1_to_ndvi "$@"
